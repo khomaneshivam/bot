@@ -17,3 +17,4 @@ google-generativeai>=0.4.0
 # Broker Execution
 # MetaTrader5 is official Windows C-extension for MT5 terminal
 MetaTrader5>=5.0.45; platform_system=="Windows"
+ta>=0.11.0
