@@ -1,0 +1,100 @@
+name: CI/CD Pipeline - Test & Deploy to AWS EC2
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Quality Gate: Linting, Unit Import Checks & Docker Validation
+  # ----------------------------------------------------------------------------
+  ci-quality-gate:
+    name: 🧪 CI - Quality Gate & Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: forex-trading-bot/client/package-lock.json
+
+      - name: ⚛️ Build React Frontend
+        working-directory: forex-trading-bot/client
+        run: |
+          npm ci
+          npm run build
+
+      - name: 🐍 Setup Python (3.11)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: forex-trading-bot/requirements.txt
+
+      - name: 📦 Install Python Dependencies & Verify Imports
+        working-directory: forex-trading-bot
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import server.app; print('✅ FastAPI server and Bot Engine verified successfully!')"
+
+      - name: 🐳 Validate Docker Container Build
+        run: |
+          docker build -t quantai-bot:ci ./forex-trading-bot
+
+  # ----------------------------------------------------------------------------
+  # Continuous Deployment: Automated AWS EC2 Deployment via SSH
+  # ----------------------------------------------------------------------------
+  deploy-ec2:
+    name: 🚀 CD - Deploy to AWS EC2
+    needs: ci-quality-gate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Verify EC2 Deployment Secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "SECRETS_CONFIGURED=false" >> $GITHUB_ENV
+            echo "::warning title=EC2 Secrets Missing::GitHub Secrets (EC2_HOST and EC2_SSH_KEY) are not configured. To enable auto-deployment to EC2, go to Settings -> Secrets and variables -> Actions and add EC2_HOST, EC2_USER, EC2_SSH_KEY."
+          else
+            echo "SECRETS_CONFIGURED=true" >> $GITHUB_ENV
+          fi
+
+      - name: 🛰️ Deploy to AWS EC2 via SSH
+        if: env.SECRETS_CONFIGURED == 'true'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER || 'ubuntu' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            echo "🚀 Connecting to AWS EC2 deployment server..."
+            TARGET_DIR="$HOME/bot"
+            
+            if [ ! -d "$TARGET_DIR/.git" ]; then
+              echo "Cloning repository..."
+              git clone https://github.com/${{ github.repository }}.git "$TARGET_DIR"
+            fi
+            
+            cd "$TARGET_DIR"
+            chmod +x deploy/*.sh
+            bash deploy/deploy.sh "$TARGET_DIR"

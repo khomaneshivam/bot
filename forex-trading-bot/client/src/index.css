@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #04060a;
+    color: #e2e8f0;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #070a12;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #334155;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background: linear-gradient(135deg, rgba(16, 23, 40, 0.75) 0%, rgba(11, 16, 28, 0.85) 100%);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .glass-card-elevated {
+    background: linear-gradient(180deg, rgba(24, 35, 60, 0.6) 0%, rgba(16, 23, 40, 0.8) 100%);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .neon-border-cyan {
+    border-color: rgba(0, 242, 254, 0.4);
+    box-shadow: 0 0 12px rgba(0, 242, 254, 0.15);
+  }
+
+  .neon-border-emerald {
+    border-color: rgba(16, 185, 129, 0.4);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.15);
+  }
+
+  .neon-border-rose {
+    border-color: rgba(244, 63, 94, 0.4);
+    box-shadow: 0 0 12px rgba(244, 63, 94, 0.15);
+  }
+
+  .neon-border-amber {
+    border-color: rgba(245, 158, 11, 0.4);
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.15);
+  }
+}

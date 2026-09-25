@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuantAI | Institutional Forex & Crypto Autonomous Trading Terminal</title>
+  <meta name="description" content="Institutional algorithmic trading terminal for Forex and Crypto markets featuring real-time cross-asset correlation analysis, DXY macro divergence, continuous online retraining, and persistent risk audit ledger.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Institutional Left Navigation Sidebar -->
+    <aside class="app-sidebar">
+      <div class="sidebar-header">
+        <a href="#" class="sidebar-brand">
+          <div class="logo-orb"><div class="orb-core"></div></div>
+          <div>
+            <div class="sidebar-brand-title">QUANT<span class="gradient-text">AI</span> <span class="pro-tag">PRO</span></div>
+            <span class="sidebar-brand-sub">Autonomous Quant System</span>
+          </div>
+        </a>
+      </div>
+
+      <ul class="sidebar-nav-list">
+        <li class="sidebar-nav-item">
+          <button class="nav-link-btn active" data-view="terminal" id="nav-btn-terminal">
+            <span class="nav-link-icon">🖥️</span>
+            <span class="nav-btn-text">Terminal</span>
+            <span class="nav-badge-pill highlight" id="nav-open-positions-badge">0 Open</span>
+          </button>
+        </li>
+        <li class="sidebar-nav-item">
+          <button class="nav-link-btn" data-view="ledger" id="nav-btn-ledger">
+            <span class="nav-link-icon">📜</span>
+            <span class="nav-btn-text">All Trades Ledger</span>
+            <span class="nav-badge-pill" id="nav-total-trades-badge">0</span>
+          </button>
+        </li>
+        <li class="sidebar-nav-item">
+          <button class="nav-link-btn" data-view="scanner" id="nav-btn-scanner">
+            <span class="nav-link-icon">⚡</span>
+            <span class="nav-btn-text">1-Min Scanner</span>
+            <span class="nav-badge-pill" id="nav-scanner-count">9 Pairs</span>
+          </button>
+        </li>
+        <li class="sidebar-nav-item">
+          <button class="nav-link-btn" data-view="ai-studio" id="nav-btn-ai">
+            <span class="nav-link-icon">🧠</span>
+            <span class="nav-btn-text">AI & Retrain Studio</span>
+            <span class="nav-badge-pill" id="nav-veto-badge">0 Vetoes</span>
+          </button>
+        </li>
+        <li class="sidebar-nav-item">
+          <button class="nav-link-btn" data-view="macro" id="nav-btn-macro">
+            <span class="nav-link-icon">🌐</span>
+            <span class="nav-btn-text">Macro Radar</span>
+            <span class="nav-badge-pill" id="nav-dxy-badge">DXY 104.5</span>
+          </button>
+        </li>
+      </ul>
+
+      <!-- Sidebar Portfolio Capital & Real-Time Balance Box -->
+      <div class="sidebar-account-box">
+        <div class="account-box-header">
+          <span>Portfolio Capital</span>
+          <span class="metric-badge badge-green" id="sidebar-mode-badge">PAPER</span>
+        </div>
+        <div class="account-box-balance">
+          <span class="balance-large" id="sidebar-balance-display">$100.00</span>
+        </div>
+        <div class="account-box-stats">
+          <span>Equity: <strong id="sidebar-equity-display">$100.00</strong></span>
+          <span id="sidebar-realized-pnl-display" class="mono text-green">+$0.00</span>
+        </div>
+        <div class="account-box-stats">
+          <span>Win Rate: <strong id="sidebar-winrate-display">0.0%</strong></span>
+          <span>Trades: <strong id="sidebar-trades-count">0</strong></span>
+        </div>
+        <button class="btn-reset-capital" id="btn-reset-portfolio-capital" title="Reset portfolio to fresh $100 starting capital">
+          ↺ Reset $100 Capital
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Viewport -->
+    <div class="main-viewport">
+      <!-- Header Bar -->
+      <header class="top-nav">
+        <div class="nav-left">
+          <!-- Connection Status & DXY Ticker -->
+          <div class="status-pill" id="connection-status-pill">
+            <span class="status-pulse-dot"></span>
+            <span id="connection-status-text">CONNECTING...</span>
+          </div>
+
+          <!-- Macro Dollar Index Pill -->
+          <div class="dxy-pill" id="dxy-ticker-pill" title="Synthetic US Dollar Index (DXY) Basket Value">
+            <span class="dxy-label">DXY PROXY:</span>
+            <span class="dxy-val mono" id="dxy-value-display">104.50</span>
+            <span class="dxy-trend-badge" id="dxy-trend-badge">NEUTRAL</span>
+          </div>
+        </div>
+
+    <!-- Mode Selector Pills -->
+    <div class="mode-selector-wrap" id="mode-selector-wrap">
+      <button class="mode-pill active" id="mode-paper-btn" data-mode="paper" title="Paper Trading Practice ($100 Virtual Capital)">
+        <span class="mode-icon">🟢</span> Paper Trading
+      </button>
+      <button class="mode-pill" id="mode-demo-btn" data-mode="demo" title="Broker Demo / Testnet API">
+        <span class="mode-icon">🔵</span> Demo Account
+      </button>
+      <button class="mode-pill live-pill" id="mode-live-btn" data-mode="live" title="Real Account Execution (Strict Institutional Risk Enforcement)">
+        <span class="mode-icon">🔴</span> Live Account
+      </button>
+    </div>
+
+    <!-- Asset Selector & Master Controls -->
+    <div class="nav-right">
+      <!-- Theme Switcher Pill -->
+      <button id="theme-toggle-btn" class="theme-toggle-pill" title="Toggle between Obsidian Terminal and Light Mode">
+        <span id="theme-icon">🌙</span>
+        <span id="theme-text">Obsidian Terminal</span>
+      </button>
+
+      <div class="asset-selector-dropdown">
+        <label for="symbol-select" class="selector-label">ASSET:</label>
+        <select id="symbol-select" class="custom-select">
+          <optgroup label="Forex Major Currencies">
+            <option value="EURUSD" selected>EUR/USD (Euro / Dollar)</option>
+            <option value="GBPUSD">GBP/USD (British Pound)</option>
+            <option value="USDJPY">USD/JPY (Dollar / Yen)</option>
+            <option value="USDCHF">USD/CHF (Dollar / Swiss Franc)</option>
+            <option value="AUDUSD">AUD/USD (Australian Dollar)</option>
+          </optgroup>
+          <optgroup label="Commodities & Metals">
+            <option value="XAUUSD">XAU/USD (Spot Gold)</option>
+          </optgroup>
+          <optgroup label="Crypto Assets">
+            <option value="BTCUSDT">BTC/USDT (Bitcoin)</option>
+            <option value="ETHUSDT">ETH/USDT (Ethereum)</option>
+            <option value="SOLUSDT">SOL/USDT (Solana)</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <!-- Autonomous Bot Toggle Switch -->
+      <div class="bot-toggle-wrap">
+        <button id="toggle-bot-btn" class="glow-button btn-success">
+          <span class="btn-icon">⚡</span>
+          <span id="bot-toggle-text">AUTONOMOUS: ACTIVE</span>
+        </button>
+      </div>
+
+      <!-- Emergency Kill Switch -->
+      <button id="emergency-kill-btn" class="glow-button btn-danger" title="Instant circuit breaker: Close all open positions and freeze execution">
+        <span class="btn-icon">🛑</span> KILL SWITCH
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Viewport Content Panels -->
+  <!-- View Panel 1: Terminal Workspace -->
+  <div class="view-panel active" id="view-panel-terminal">
+    <main class="dashboard-container">
+    
+    <!-- Top Metrics Row -->
+    <section class="metrics-row" aria-label="Key Performance Indicators">
+      
+      <!-- Card 1: Total Equity -->
+      <div class="metric-card glass-panel" id="metric-equity-card">
+        <div class="metric-header">
+          <span class="metric-title">TOTAL EQUITY</span>
+          <span class="metric-badge badge-emerald" id="account-mode-badge">PAPER TRADING</span>
+        </div>
+        <div class="metric-value-wrap">
+          <span class="metric-value" id="val-equity">$100.00</span>
+          <span class="pnl-badge" id="val-unrealized-badge">+$0.00</span>
+        </div>
+        <div class="metric-subtext">
+          Balance: <span id="val-balance" class="mono">$100.00</span> | Realized: <span id="val-realized-pnl" class="mono">$0.00</span>
+        </div>
+      </div>
+
+      <!-- Card 2: Win Rate & Profit Factor -->
+      <div class="metric-card glass-panel" id="metric-winrate-card">
+        <div class="metric-header">
+          <span class="metric-title">WIN RATE & PROFIT FACTOR</span>
+          <span class="metric-badge badge-cyan" id="trades-count-badge">0 TRADES</span>
+        </div>
+        <div class="metric-value-wrap">
+          <span class="metric-value" id="val-win-rate">0.0%</span>
+          <span class="metric-ratio" id="val-profit-factor">PF 1.00</span>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="win-rate-progress-bar" style="width: 0%;"></div>
+        </div>
+        <div class="metric-subtext">
+          <span class="text-green"><strong id="val-win-count">0</strong> Wins</span> vs <span class="text-red"><strong id="val-loss-count">0</strong> Losses</span>
+        </div>
+      </div>
+
+      <!-- Card 3: Market Regime & Correlation Confirmation -->
+      <div class="metric-card glass-panel" id="metric-regime-card">
+        <div class="metric-header">
+          <span class="metric-title">REGIME & CORRELATION</span>
+          <span class="metric-badge badge-purple" id="asset-type-badge">FOREX</span>
+        </div>
+        <div class="metric-value-wrap">
+          <span class="metric-value font-highlight" id="val-market-regime">STRONG_BULL_TREND</span>
+        </div>
+        <div class="metric-subtext" id="regime-explanation">
+          Macro USD Alignment Active | Correlation Guard Enabled
+        </div>
+      </div>
+
+      <!-- Card 4: AI Brain & Institutional Safety Shield -->
+      <div class="metric-card glass-panel" id="metric-ai-card">
+        <div class="metric-header">
+          <span class="metric-title">NEURAL SHIELD & RISK AUDIT</span>
+          <span class="metric-badge badge-emerald" id="ai-status-badge">ACTIVE</span>
+        </div>
+        <div class="metric-value-wrap">
+          <span class="metric-value" id="val-ai-params">45,000</span>
+          <span class="metric-unit">PARAMETERS</span>
+        </div>
+        <div class="metric-subtext">
+          Learned Mistakes: <strong class="text-yellow" id="val-mistakes-count">0</strong> | Vetoes Enforced: <strong class="text-cyan" id="val-vetoed-count">0</strong>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Main Workspace Grid: Chart (Left) vs Correlation & Strategy Radar (Right) -->
+    <section class="main-workspace-grid">
+      
+      <!-- Left Column: Candlestick Chart & Execution HUD -->
+      <div class="chart-panel glass-panel">
+        <div class="chart-header">
+          <div class="chart-title-group">
+            <span class="chart-symbol" id="chart-symbol-display">EUR/USD</span>
+            <span class="chart-timeframe-tag" id="chart-tf-display">5M INTERVAL</span>
+            <span class="live-price-tag" id="chart-live-price">$0.00</span>
+          </div>
+          <div class="chart-tools">
+            <button class="tool-btn" id="btn-retrain-ai" title="Trigger instant AI model retraining on live data and past wrong trades">
+              <span class="btn-icon">🧠</span> Retrain Model Now
+            </button>
+            <div class="manual-order-btns">
+              <button class="tool-btn btn-buy" id="btn-manual-buy">BUY</button>
+              <button class="tool-btn btn-sell" id="btn-manual-sell">SELL</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Canvas Chart Container -->
+        <div class="canvas-container" id="canvas-wrapper">
+          <canvas id="trading-chart-canvas"></canvas>
+          <div id="chart-crosshair-tooltip" class="chart-tooltip"></div>
+        </div>
+
+        <!-- Consensus Decision Banner -->
+        <div class="decision-banner" id="autonomous-decision-banner">
+          <div class="decision-indicator" id="decision-indicator-dot"></div>
+          <div class="decision-text-wrap">
+            <div class="decision-headline">
+              AUTONOMOUS SIGNAL: <span id="decision-signal-text" class="font-bold">ANALYZING...</span>
+              <span class="decision-conf-tag" id="decision-confidence-tag">CONF 0%</span>
+            </div>
+            <div class="decision-detail" id="decision-reason-text">
+              Scanning cross-market correlations, multi-timeframe indicators, and macro DXY flow...
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Cross-Asset Correlation Heatmap & Strategy Radar -->
+      <div class="sidebar-panel">
+        
+        <!-- Cross-Asset Correlation Heatmap Card -->
+        <div class="glass-panel studio-card" id="correlation-card">
+          <div class="card-header">
+            <h2 class="card-title"><span class="header-icon">🔗</span> CROSS-ASSET CORRELATION MATRIX</h2>
+            <span class="card-tag badge-cyan" id="corr-updated-tag">REAL-TIME</span>
+          </div>
+          <div class="studio-description">
+            Live Pearson correlation matrix across Forex, Gold, and Crypto. Guards against simultaneous dollar exposure and detects macro lead-lag divergences.
+          </div>
+          <div class="correlation-heatmap-wrap" id="correlation-matrix-container">
+            <!-- Dynamic Matrix Table will be rendered here -->
+          </div>
+        </div>
+
+        <!-- Strategy Ensemble Radar Card -->
+        <div class="glass-panel studio-card" id="strategy-studio-card">
+          <div class="card-header">
+            <h2 class="card-title"><span class="header-icon">🧭</span> STRATEGY ENSEMBLE RADAR</h2>
+            <span class="card-tag" id="active-strategy-tag">6 ACTIVE</span>
+          </div>
+          <div class="strategy-list" id="strategy-list-container">
+            <!-- Dynamic Strategy Rows will be rendered here -->
+          </div>
+        </div>
+
+        <!-- Wrong-Trades Retraining Studio Card -->
+        <div class="glass-panel studio-card" id="wrong-trades-card">
+          <div class="card-header">
+            <h2 class="card-title"><span class="header-icon">🛡️</span> WRONG TRADES LEARNING STUDIO</h2>
+            <span class="card-tag badge-shield" id="shield-active-tag">SHIELD ACTIVE</span>
+          </div>
+          <div class="studio-description">
+            Failed setups are analyzed for root-cause and incorporated into training with high sample penalties so the bot never repeats the same failure pattern.
+          </div>
+          <div class="mistake-log-container" id="mistake-log-list">
+            <div class="empty-placeholder">No failed trades recorded yet. Bot is performing with clean execution.</div>
+          </div>
+        </div>
+
+      </div>
+
+    </section>
+ 
+    <!-- 1-Minute Multi-Pair & Strategy Audit Matrix Section -->
+    <section class="audit-matrix-section" id="audit-matrix-section">
+      <div class="glass-panel audit-card full-width">
+        <div class="card-header audit-card-header">
+          <div class="audit-title-wrap">
+            <h2 class="card-title">
+              <span class="header-icon">⏱️</span> 1-MINUTE MULTI-PAIR & STRATEGY AUDIT SCANNER
+            </h2>
+            <span class="audit-subtitle">Evaluates all 9 assets across all 6 quantitative strategies every 60 seconds with live trade chances</span>
+          </div>
+          <div class="audit-controls">
+            <div class="audit-timer-badge" id="audit-countdown-badge" title="Automated scan triggers every 60 seconds">
+              <span class="timer-dot"></span> NEXT AUDIT IN: <span id="audit-countdown-val" class="mono font-bold">60s</span>
+            </div>
+            <button class="tool-btn btn-audit-scan" id="btn-force-audit" title="Trigger instant multi-pair audit scan">
+              <span class="btn-icon">⚡</span> Run Scan Now
+            </button>
+          </div>
+        </div>
+
+        <!-- Audit Table Matrix -->
+        <div class="table-responsive">
+          <table class="quant-table audit-table" id="audit-matrix-table">
+            <thead>
+              <tr>
+                <th>Asset Pair</th>
+                <th>Price</th>
+                <th>Regime</th>
+                <th>Trade Feasibility</th>
+                <th>Trend Momentum</th>
+                <th>Mean Reversion</th>
+                <th>Breakout</th>
+                <th>Smart Money (SMC)</th>
+                <th>Macro DXY</th>
+                <th>AI Predictor</th>
+                <th>Audit Verdict</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="audit-matrix-tbody">
+              <tr>
+                <td colspan="12" class="text-center text-muted">
+                  <span class="spinner-sm"></span> Initializing 1-minute multi-pair audit scanner...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bottom Section: Active Positions, Event Terminal, & Persistent Ledger -->
+    <section class="bottom-workspace-grid">
+      
+      <!-- Open Positions Table -->
+      <div class="glass-panel data-card">
+        <div class="card-header">
+          <h2 class="card-title"><span class="header-icon">📊</span> ACTIVE POSITIONS</h2>
+          <span class="card-tag badge-green" id="active-positions-badge">0 OPEN</span>
+        </div>
+        <div class="table-responsive">
+          <table class="quant-table" id="positions-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Entry Price</th>
+                <th>Current Price</th>
+                <th>SL / TP</th>
+                <th>Floating PnL</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="positions-tbody">
+              <tr>
+                <td colspan="9" class="text-center text-muted">No open positions. Autonomous engine is scanning for high-probability setups.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Event & AI Reasoning Terminal -->
+      <div class="glass-panel data-card">
+        <div class="card-header">
+          <h2 class="card-title"><span class="header-icon">💻</span> REAL-TIME RISK & ENGINE TERMINAL</h2>
+          <span class="card-tag badge-cyan">TELEMETRY</span>
+        </div>
+        <div class="terminal-log-feed" id="terminal-logs">
+          <!-- Terminal logs will stream here in real-time -->
+        </div>
+      </div>
+
+      <!-- Closed Trades History & Persistent Ledger -->
+      <div class="glass-panel data-card full-width">
+        <div class="card-header">
+          <h2 class="card-title"><span class="header-icon">📜</span> INSTITUTIONAL TRADE AUDIT LEDGER</h2>
+          <span class="card-tag" id="closed-trades-badge">PERSISTENT SQLITE</span>
+        </div>
+        <div class="table-responsive">
+          <table class="quant-table" id="history-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Symbol</th>
+                <th>Market</th>
+                <th>Type</th>
+                <th>Strategy</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>PnL ($)</th>
+                <th>Return %</th>
+                <th>Exit Reason</th>
+                <th>Learning Status</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr>
+                <td colspan="11" class="text-center text-muted">No trade history yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+  </main>
+  </div> <!-- end view-panel-terminal -->
+
+  <!-- View Panel 2: Dedicated Full-Screen All Trades Ledger -->
+  <div class="view-panel" id="view-panel-ledger">
+    <div class="ledger-view-header">
+      <div class="ledger-title-group">
+        <h2><span class="header-icon">📜</span> ALL TRADES LEDGER & RISK AUDIT</h2>
+        <p>Exhaustive trade tracking: Active open positions, historical closed trades, entry features vector, and loss causes logged to SQLite.</p>
+      </div>
+      <div class="ledger-actions-group">
+        <button class="btn-ledger-action" id="btn-refresh-ledger" onclick="window.terminal && window.terminal.fetchAndRenderAllTrades()">
+          <span>🔄</span> Refresh Ledger
+        </button>
+        <button class="btn-ledger-action btn-export-csv" id="btn-download-csv" onclick="window.terminal && window.terminal.exportTradesCSV()">
+          <span>📥</span> Export CSV Ledger
+        </button>
+      </div>
+    </div>
+
+    <!-- Ledger KPI Ribbon -->
+    <div class="ledger-kpis-grid">
+      <div class="ledger-kpi-card">
+        <span class="ledger-kpi-label">Total Portfolio Trades</span>
+        <span class="ledger-kpi-val" id="ledger-kpi-total-trades">0</span>
+        <span class="ledger-kpi-sub" id="ledger-kpi-open-closed-sub">0 Open · 0 Closed</span>
+      </div>
+      <div class="ledger-kpi-card">
+        <span class="ledger-kpi-label">Win Rate %</span>
+        <span class="ledger-kpi-val text-green" id="ledger-kpi-winrate">0.0%</span>
+        <span class="ledger-kpi-sub" id="ledger-kpi-wins-losses-sub">0 Wins · 0 Losses</span>
+      </div>
+      <div class="ledger-kpi-card">
+        <span class="ledger-kpi-label">Net Realized PnL</span>
+        <span class="ledger-kpi-val" id="ledger-kpi-net-pnl">$0.00</span>
+        <span class="ledger-kpi-sub">Deducted / credited on balance</span>
+      </div>
+      <div class="ledger-kpi-card">
+        <span class="ledger-kpi-label">Profit Factor</span>
+        <span class="ledger-kpi-val text-cyan" id="ledger-kpi-pf">1.00</span>
+        <span class="ledger-kpi-sub" id="ledger-kpi-volume-sub">Institutional Quality</span>
+      </div>
+    </div>
+
+    <!-- Ledger Filter Bar & Search -->
+    <div class="ledger-controls-bar">
+      <div class="ledger-filter-tabs" id="ledger-filter-tabs">
+        <button class="filter-pill active" data-filter="all" onclick="window.terminal.filterLedger('all', this)">All Records (<span id="count-filter-all">0</span>)</button>
+        <button class="filter-pill" data-filter="open" onclick="window.terminal.filterLedger('open', this)">🟢 Active Open (<span id="count-filter-open">0</span>)</button>
+        <button class="filter-pill" data-filter="wins" onclick="window.terminal.filterLedger('wins', this)">🏆 Wins (<span id="count-filter-wins">0</span>)</button>
+        <button class="filter-pill" data-filter="losses" onclick="window.terminal.filterLedger('losses', this)">🔴 Losses & Retrained (<span id="count-filter-losses">0</span>)</button>
+        <button class="filter-pill" data-filter="forex" onclick="window.terminal.filterLedger('forex', this)">Forex Pairs</button>
+        <button class="filter-pill" data-filter="crypto" onclick="window.terminal.filterLedger('crypto', this)">Crypto Assets</button>
+      </div>
+      <div class="ledger-search-box">
+        <span class="ledger-search-icon">🔍</span>
+        <input type="text" class="ledger-search-input" id="ledger-search-input" placeholder="Search Symbol, ID, Strategy..." oninput="window.terminal && window.terminal.handleLedgerSearch(this.value)">
+      </div>
+    </div>
+
+    <!-- Exhaustive Ledger Table -->
+    <div class="glass-panel data-card full-width">
+      <div class="table-responsive">
+        <table class="quant-table" id="all-trades-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Trade ID</th>
+              <th>Symbol</th>
+              <th>Type</th>
+              <th>Size / Lots</th>
+              <th>Entry Price</th>
+              <th>Exit Price</th>
+              <th>SL / TP</th>
+              <th>PnL ($)</th>
+              <th>Return %</th>
+              <th>Strategy</th>
+              <th>Exit / Retrain Cause</th>
+              <th>Duration / Time</th>
+            </tr>
+          </thead>
+          <tbody id="all-trades-tbody">
+            <tr>
+              <td colspan="13" class="text-center text-muted">No trades recorded yet. Bot will log every trade execution here in real time.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- View Panel 3: 1-Minute Live Scanner Dedicated Hub -->
+  <div class="view-panel" id="view-panel-scanner">
+    <div class="ledger-view-header">
+      <div class="ledger-title-group">
+        <h2><span class="header-icon">⚡</span> 1-MINUTE MULTI-PAIR AUDIT SCANNER</h2>
+        <p>Parallel quantitative feasibility scan evaluated across 9 asset pairs and 6 institutional strategy engines every 60 seconds.</p>
+      </div>
+      <div class="ledger-actions-group">
+        <button class="btn-ledger-action" onclick="window.terminal && window.terminal.triggerManualAudit()">
+          <span>⚡</span> Force Audit Scan Now
+        </button>
+      </div>
+    </div>
+
+    <div class="glass-panel data-card full-width">
+      <div class="table-responsive">
+        <table class="quant-table" id="scanner-view-table">
+          <thead>
+            <tr>
+              <th>Asset Pair</th>
+              <th>Price</th>
+              <th>Regime</th>
+              <th>Trade Feasibility</th>
+              <th>Trend Momentum</th>
+              <th>Mean Reversion</th>
+              <th>Breakout</th>
+              <th>Smart Money (SMC)</th>
+              <th>Macro DXY</th>
+              <th>AI Predictor</th>
+              <th>Audit Verdict</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="scanner-view-tbody">
+            <tr>
+              <td colspan="12" class="text-center text-muted">Loading 1-minute scanner telemetry...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- View Panel 4: AI Retrain & Mistake Studio -->
+  <div class="view-panel" id="view-panel-ai-studio">
+    <div class="ledger-view-header">
+      <div class="ledger-title-group">
+        <h2><span class="header-icon">🧠</span> AI ADAPTIVE LEARNING & MISTAKE RETRAINING STUDIO</h2>
+        <p>Continuous online gradient adaptation, Cosine Negative Pattern Shield, and Gemini neural veto reasoning telemetry.</p>
+      </div>
+      <div class="ledger-actions-group">
+        <button class="btn-ledger-action" onclick="window.terminal && window.terminal.triggerRetrain()">
+          <span>⚡</span> Trigger Neural Retraining
+        </button>
+      </div>
+    </div>
+
+    <div class="grid-2col" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px;">
+      <div class="glass-panel data-card">
+        <div class="card-header">
+          <h2 class="card-title">🛡️ COSINE NEGATIVE PATTERN SHIELD</h2>
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px;">
+          The system vectorizes every trade at entry into a 60-dimensional quantitative snapshot. Whenever a trade results in a loss, its normalized feature vector is memorized. Future setups with Cosine Similarity > 0.88 to past losses are strictly vetoed.
+        </p>
+        <div class="terminal-log-feed" style="max-height: 240px;" id="ai-studio-wrong-trades-feed">
+          <div class="log-entry log-info"><span class="log-time">[LIVE]</span> Cosine Shield active. Monitoring candidate setups.</div>
+        </div>
+      </div>
+
+      <div class="glass-panel data-card">
+        <div class="card-header">
+          <h2 class="card-title">🤖 GEMINI HYBRID QUANT LOGIC</h2>
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px;">
+          Combines low-latency local technical ensembles (Trend, RSI Mean Reversion, Keltner Breakout, SMC Order Blocks, DXY Macro) with Google Gemini AI structured market regime synthesis and sentiment audits.
+        </p>
+        <div class="ai-box" style="padding: 14px; background: var(--bg-card-subtle); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px;">CURRENT ML STATUS:</div>
+          <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-green);" id="ai-studio-status-text">ONLINE & ADAPTING</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- View Panel 5: Macro & Correlation Radar -->
+  <div class="view-panel" id="view-panel-macro">
+    <div class="ledger-view-header">
+      <div class="ledger-title-group">
+        <h2><span class="header-icon">🌐</span> CROSS-ASSET CORRELATION & MACRO DXY RADAR</h2>
+        <p>Institutional dollar index basket tracking and multi-asset correlation matrices to prevent correlated portfolio drawdowns.</p>
+      </div>
+    </div>
+
+    <div class="glass-panel data-card full-width">
+      <div class="card-header">
+        <h2 class="card-title">📊 LIVE CROSS-ASSET CORRELATION COEFFICIENTS</h2>
+      </div>
+      <div class="correlation-grid" id="macro-view-correlation-grid">
+        <!-- Rendered by JS -->
+      </div>
+    </div>
+  </div>
+
+  </div> <!-- end main-viewport -->
+  </div> <!-- end app-layout -->
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
