@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 from typing import Optional, Dict
 
 from bot.config.settings import settings
@@ -46,12 +47,40 @@ from bot.ai.ml_engine import ml_engine
 from bot.ai.audit_scanner import market_audit_scanner
 from bot.risk.psychology_guard import psychology_guard
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Production-grade startup recovery sequence:
+    1. Initialize storage and tables
+    2. Bootstrap RBAC default users
+    3. Recover active positions and ledger state (NO auto-reset)
+    4. Run initial broker reconciliation
+    5. Start autonomous cycle loop
+    """
+    db.initialize_db()
+    bootstrap_initial_users()
+
+    # Reconcile state with broker on boot
+    report = execution_service.reconcile()
+    if not report.is_synchronized:
+        circuit_breaker_manager.trip("BOOT_RECONCILIATION_DESYNC", "Broker state mismatch detected on startup")
+
+    # Start autonomous trading loop
+    loop_task = asyncio.create_task(bot_manager.start())
+    yield
+    # Graceful shutdown sequence
+    try:
+        await bot_manager.stop()
+    except Exception:
+        pass
+
 app = FastAPI(
     title="QuantAI Autonomous Trading Platform",
     version="2.0.0",
     docs_url="/docs" if not settings.is_production() else None,
     redoc_url="/redoc" if not settings.is_production() else None,
     openapi_url="/openapi.json" if not settings.is_production() else None,
+    lifespan=lifespan
 )
 
 # Attach Security Headers & CORS Middleware
@@ -77,27 +106,6 @@ async def metrics_and_logging_middleware(request: Request, call_next):
     ).inc()
 
     return response
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    Production-grade startup recovery sequence:
-    1. Initialize storage and tables
-    2. Bootstrap RBAC default users
-    3. Recover active positions and ledger state (NO auto-reset)
-    4. Run initial broker reconciliation
-    5. Start autonomous cycle loop
-    """
-    db.initialize_db()
-    bootstrap_initial_users()
-
-    # Reconcile state with broker on boot
-    report = execution_service.reconcile()
-    if not report.is_synchronized:
-        circuit_breaker_manager.trip("BOOT_RECONCILIATION_DESYNC", "Broker state mismatch detected on startup")
-
-    # Start autonomous trading loop
-    asyncio.create_task(bot_manager.start())
 
 # Request Models
 class ModeRequest(BaseModel):

@@ -245,6 +245,9 @@ class ExecutionService:
                 gross_pnl = diff * size * 100000.0
 
             net_pnl = gross_pnl - close_result.commission
+            entry_p = max(entry_price, 1e-6)
+            ret_pct = round(((exit_price - entry_p) / entry_p * 100.0) if direction == "BUY" else ((entry_p - exit_price) / entry_p * 100.0), 2)
+            was_wrong = 1 if net_pnl < 0 else 0
 
             # Remove from active_positions
             cursor.execute("DELETE FROM active_positions WHERE id = ?", (position_id,))
@@ -253,13 +256,22 @@ class ExecutionService:
             cursor.execute("""
                 UPDATE trades SET
                     exit_price = ?,
+                    close_price = ?,
                     exit_time = ?,
+                    close_time = ?,
                     gross_pnl = ?,
                     net_pnl = ?,
+                    pnl = ?,
+                    return_pct = ?,
                     exit_reason = ?,
+                    was_wrong_trade = ?,
                     status = 'CLOSED'
                 WHERE id = ?
-            """, (exit_price, now, round(gross_pnl, 2), round(net_pnl, 2), exit_reason, position_id))
+            """, (
+                exit_price, exit_price, now, now, round(gross_pnl, 2),
+                round(net_pnl, 2), round(net_pnl, 2), ret_pct, exit_reason,
+                was_wrong, position_id
+            ))
 
             conn.commit()
 

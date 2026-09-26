@@ -46,6 +46,8 @@ def clean_safety_state():
         cur = conn.cursor()
         cur.execute("DELETE FROM active_positions")
         cur.execute("DELETE FROM reconciliation_incidents")
+        cur.execute("DELETE FROM trades")
+        cur.execute("DELETE FROM risk_audit")
         conn.commit()
         conn.close()
     except Exception:
@@ -62,6 +64,8 @@ def clean_safety_state():
         cur = conn.cursor()
         cur.execute("DELETE FROM active_positions")
         cur.execute("DELETE FROM reconciliation_incidents")
+        cur.execute("DELETE FROM trades")
+        cur.execute("DELETE FROM risk_audit")
         conn.commit()
         conn.close()
     except Exception:

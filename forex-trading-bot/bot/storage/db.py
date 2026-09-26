@@ -96,8 +96,10 @@ class MySQLCursorWrapper:
 
 class MySQLConnectionWrapper:
     """Wraps PyMySQL connection to mirror SQLite connection API."""
-    def __init__(self, raw_conn):
+    def __init__(self, raw_conn, pool=None):
         self._conn = raw_conn
+        self._pool = pool
+        self._is_closed = False
         self.row_factory = None
 
     def cursor(self, cursorclass=None):
@@ -116,22 +118,134 @@ class MySQLConnectionWrapper:
         self._conn.rollback()
 
     def close(self):
-        self._conn.close()
+        if self._is_closed:
+            return
+        self._is_closed = True
+        if self._pool is not None:
+            self._pool.release(self._conn)
+        else:
+            self._conn.close()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            self.rollback()
-        else:
-            self.commit()
+        try:
+            if exc_type is not None:
+                self.rollback()
+            else:
+                self.commit()
+        finally:
+            self.close()
+
+
+class MySQLConnectionPool:
+    """Thread-safe connection pool for PyMySQL connections."""
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        user: str,
+        password: str,
+        database: str,
+        max_connections: int = 10,
+        timeout: float = 10.0
+    ):
+        import queue
+        import threading
+        self.host = host
+        self.port = port
+        self.user = user
+        self.password = password
+        self.database = database
+        self.max_connections = max_connections
+        self.timeout = timeout
+        self._pool = queue.Queue(maxsize=max_connections)
+        self._lock = threading.Lock()
+        self._allocated = 0
+
+    def _create_raw_connection(self):
+        return pymysql.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            database=self.database,
+            charset="utf8mb4",
+            autocommit=False
+        )
+
+    def get_connection(self) -> MySQLConnectionWrapper:
+        conn = None
+        # Try to retrieve existing idle connection
+        try:
+            conn = self._pool.get_nowait()
+        except Exception:
+            pass
+
+        if conn is not None:
+            # Validate connection health
+            try:
+                conn.ping()
+                return MySQLConnectionWrapper(conn, pool=self)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                with self._lock:
+                    self._allocated = max(0, self._allocated - 1)
+
+        # Allocate new connection if under max capacity
+        with self._lock:
+            if self._allocated < self.max_connections:
+                self._allocated += 1
+                try:
+                    raw_conn = self._create_raw_connection()
+                    return MySQLConnectionWrapper(raw_conn, pool=self)
+                except Exception:
+                    self._allocated = max(0, self._allocated - 1)
+                    raise
+
+        # Wait for available connection in queue
+        import queue
+        try:
+            conn = self._pool.get(timeout=self.timeout)
+            try:
+                conn.ping()
+            except Exception:
+                conn = self._create_raw_connection()
+            return MySQLConnectionWrapper(conn, pool=self)
+        except queue.Empty:
+            raise TimeoutError(f"MySQL connection pool exhausted (max={self.max_connections}, timeout={self.timeout}s).")
+
+    def release(self, conn):
+        try:
+            self._pool.put_nowait(conn)
+        except Exception:
+            # Queue is full, close physical connection
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self._lock:
+                self._allocated = max(0, self._allocated - 1)
+
+    def close_all(self):
+        while not self._pool.empty():
+            try:
+                conn = self._pool.get_nowait()
+                conn.close()
+            except Exception:
+                pass
+        with self._lock:
+            self._allocated = 0
 
 
 class Database:
     """
     Unified Storage Layer for QuantAI Platform supporting MySQL & SQLite.
-    Automatically provisions tables, manages connections, and ensures cross-database compatibility.
+    Automatically provisions tables, manages connections with pooling, and ensures cross-database compatibility.
     """
     def __init__(
         self,
@@ -168,6 +282,18 @@ class Database:
             print("[Database] [WARN] PyMySQL not installed. Falling back to SQLite backend.")
             self.backend = "sqlite"
 
+        self._pool: Optional[MySQLConnectionPool] = None
+        if self.backend == "mysql" and PYMYSQL_AVAILABLE:
+            self._pool = MySQLConnectionPool(
+                host=self.mysql_host,
+                port=self.mysql_port,
+                user=self.mysql_user,
+                password=self.mysql_password,
+                database=self.mysql_db,
+                max_connections=int(os.getenv("DB_POOL_SIZE", "10")),
+                timeout=float(os.getenv("DB_POOL_TIMEOUT", "10.0"))
+            )
+
         # Initialize schema
         self._init_database()
 
@@ -179,20 +305,32 @@ class Database:
         """Returns active database connection with normalized interface."""
         if self.backend == "mysql":
             try:
-                raw_conn = pymysql.connect(
-                    host=self.mysql_host,
-                    port=self.mysql_port,
-                    user=self.mysql_user,
-                    password=self.mysql_password,
-                    database=self.mysql_db,
-                    charset="utf8mb4",
-                    autocommit=False
-                )
-                return MySQLConnectionWrapper(raw_conn)
+                if self._pool is None:
+                    self._pool = MySQLConnectionPool(
+                        host=self.mysql_host,
+                        port=self.mysql_port,
+                        user=self.mysql_user,
+                        password=self.mysql_password,
+                        database=self.mysql_db,
+                        max_connections=int(os.getenv("DB_POOL_SIZE", "10")),
+                        timeout=float(os.getenv("DB_POOL_TIMEOUT", "10.0"))
+                    )
+                return self._pool.get_connection()
             except Exception as e:
-                # If MySQL is configured but temporarily unavailable, warn and return SQLite fallback
-                print(f"[Database] [WARN] MySQL connection error ({e}). Using SQLite fallback.")
-                return self._get_sqlite_connection()
+                allow_fallback = os.getenv("ALLOW_SQLITE_FALLBACK", "false").lower() in ("true", "1", "yes")
+                if allow_fallback:
+                    print(f"[Database] [WARN] MySQL connection error ({e}). Using SQLite fallback per ALLOW_SQLITE_FALLBACK=true.")
+                    return self._get_sqlite_connection()
+                else:
+                    try:
+                        from bot.risk.circuit_breakers import circuit_breaker_manager
+                        circuit_breaker_manager.trip("DATABASE_DISCONNECTED")
+                    except Exception:
+                        pass
+                    raise ConnectionError(
+                        f"Database connection to MySQL {self.mysql_host}:{self.mysql_port}/{self.mysql_db} failed: {e}. "
+                        "Fail-closed policy engaged (ALLOW_SQLITE_FALLBACK is false)."
+                    )
         else:
             return self._get_sqlite_connection()
 
@@ -207,6 +345,39 @@ class Database:
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA busy_timeout = 5000;")
         return conn
+
+    def record_account_snapshot(
+        self,
+        balance: float,
+        equity: float,
+        unrealized_pnl: float,
+        realized_pnl: float,
+        daily_starting_equity: float,
+        drawdown_limit_hit: bool
+    ) -> None:
+        """Persists point-in-time equity and risk metrics to account_snapshots."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("""
+                INSERT INTO account_snapshots (
+                    timestamp, balance, equity, unrealized_pnl, realized_pnl,
+                    daily_starting_equity, drawdown_limit_hit
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                now,
+                round(float(balance), 2),
+                round(float(equity), 2),
+                round(float(unrealized_pnl), 2),
+                round(float(realized_pnl), 2),
+                round(float(daily_starting_equity), 2),
+                1 if drawdown_limit_hit else 0
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[Database] [WARN] Failed to record account snapshot: {e}")
 
     def _init_database(self):
         """Initializes tables, indexes, and schema definitions idempotently."""
@@ -325,6 +496,7 @@ class Database:
                     order_id VARCHAR(64),
                     broker_order_id VARCHAR(64),
                     symbol VARCHAR(32) NOT NULL,
+                    market_type VARCHAR(16) DEFAULT 'FOREX',
                     side VARCHAR(16),
                     direction VARCHAR(16),
                     quantity DOUBLE,
@@ -355,6 +527,12 @@ class Database:
                     features_json TEXT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
+
+            # Ensure market_type exists if table was pre-existing
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN market_type VARCHAR(16) DEFAULT 'FOREX' AFTER symbol;")
+            except Exception:
+                pass
 
             # 7. Immutable Security & Operational Audit Log
             cursor.execute("""
@@ -417,6 +595,17 @@ class Database:
                     realized_pnl DOUBLE NOT NULL,
                     daily_starting_equity DOUBLE NOT NULL,
                     drawdown_limit_hit INT DEFAULT 0
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """)
+
+            # 11. Institutional Risk Audit Events Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS risk_audit (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    timestamp VARCHAR(32) NOT NULL,
+                    event_type VARCHAR(64) NOT NULL,
+                    symbol VARCHAR(32),
+                    details TEXT NOT NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
 
@@ -523,6 +712,7 @@ class Database:
                 order_id TEXT,
                 broker_order_id TEXT,
                 symbol TEXT NOT NULL,
+                market_type TEXT DEFAULT 'FOREX',
                 side TEXT,
                 direction TEXT,
                 quantity REAL,
@@ -553,6 +743,11 @@ class Database:
                 features_json TEXT
             );
         """)
+
+        try:
+            cursor.execute("ALTER TABLE trades ADD COLUMN market_type TEXT DEFAULT 'FOREX';")
+        except Exception:
+            pass
 
         # 7. Immutable Security & Operational Audit Log
         cursor.execute("""
@@ -623,6 +818,17 @@ class Database:
                 realized_pnl REAL NOT NULL,
                 daily_starting_equity REAL NOT NULL,
                 drawdown_limit_hit INTEGER DEFAULT 0
+            );
+        """)
+
+        # 11. Institutional Risk Audit Events Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS risk_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                symbol TEXT,
+                details TEXT NOT NULL
             );
         """)
 

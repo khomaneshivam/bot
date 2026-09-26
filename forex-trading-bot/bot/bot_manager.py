@@ -26,6 +26,7 @@ from bot.data.news_feed import news_feed_engine
 from bot.risk.psychology_guard import psychology_guard
 from bot.risk.circuit_breakers import circuit_breaker_manager
 from bot.execution.service import execution_service
+from bot.storage.db import db
 
 class BotManager:
     def __init__(self):
@@ -33,6 +34,7 @@ class BotManager:
         self.active_symbol = settings.DEFAULT_SYMBOL
         self.active_timeframe = settings.DEFAULT_TIMEFRAME
         self.loop_task: Optional[asyncio.Task] = None
+        self.last_snapshot_time: float = 0.0
         
         # State Caches
         self.latest_candles_df: Optional[pd.DataFrame] = None
@@ -171,6 +173,29 @@ class BotManager:
         """High-frequency institutional execution loop."""
         while self.is_running:
             try:
+                # 0. Check Midnight UTC daily starting baseline rollover & periodic snapshots
+                if risk_manager.check_and_rollover_daily_baseline():
+                    self.log_event("SUCCESS", f"Midnight UTC rollover complete: Daily baseline set to ${risk_manager.daily_starting_equity:.2f}.", "RISK")
+                    db.record_account_snapshot(
+                        balance=execution_engine.paper_balance,
+                        equity=execution_engine.paper_equity,
+                        unrealized_pnl=sum(p.get("unrealized_pnl", 0.0) for p in execution_engine.open_positions),
+                        realized_pnl=execution_engine.paper_realized_pnl,
+                        daily_starting_equity=risk_manager.daily_starting_equity,
+                        drawdown_limit_hit=risk_manager.daily_drawdown_limit_hit
+                    )
+
+                if time.time() - self.last_snapshot_time >= 900.0 or self.last_snapshot_time == 0.0:
+                    self.last_snapshot_time = time.time()
+                    db.record_account_snapshot(
+                        balance=execution_engine.paper_balance,
+                        equity=execution_engine.paper_equity,
+                        unrealized_pnl=sum(p.get("unrealized_pnl", 0.0) for p in execution_engine.open_positions),
+                        realized_pnl=execution_engine.paper_realized_pnl,
+                        daily_starting_equity=risk_manager.daily_starting_equity,
+                        drawdown_limit_hit=risk_manager.daily_drawdown_limit_hit
+                    )
+
                 # 1. Fetch live market candles in worker thread for active symbol
                 df = await asyncio.to_thread(market_feed.get_candles, self.active_symbol, self.active_timeframe, 150)
                 self.latest_candles_df = df

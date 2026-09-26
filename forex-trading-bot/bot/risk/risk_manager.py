@@ -21,12 +21,32 @@ class RiskManager:
         self.max_risk_per_trade_pct: float = settings.MAX_RISK_PER_TRADE_PERCENT
         self.max_concurrent_positions: int = settings.MAX_OPEN_POSITIONS_OVERALL
         self.max_symbol_positions: int = settings.MAX_OPEN_POSITIONS_PER_PAIR
+        self.last_rollover_utc_date: str = time.strftime("%Y-%m-%d", time.gmtime())
 
     def reset_daily_baseline(self, equity: float):
         """Sets new starting baseline for daily drawdown calculation."""
         self.daily_starting_equity = equity
         self.current_equity = equity
         self.daily_drawdown_limit_hit = False
+        self.last_rollover_utc_date = time.strftime("%Y-%m-%d", time.gmtime())
+
+    def check_and_rollover_daily_baseline(self, current_utc_date: Optional[str] = None) -> bool:
+        """
+        Performs midnight UTC rollover of the daily starting equity baseline.
+        Resets daily starting equity to current equity and clears daily drawdown limit.
+        Returns True if rollover occurred.
+        """
+        utc_today = current_utc_date or time.strftime("%Y-%m-%d", time.gmtime())
+        if utc_today != self.last_rollover_utc_date:
+            prev_baseline = self.daily_starting_equity
+            self.daily_starting_equity = self.current_equity
+            self.daily_drawdown_limit_hit = False
+            self.last_rollover_utc_date = utc_today
+            if "DAILY_DRAWDOWN_LIMIT" in circuit_breaker_manager._tripped_breakers:
+                circuit_breaker_manager.reset_breaker("DAILY_DRAWDOWN_LIMIT")
+            print(f"[RiskManager] [ROLLOVER] Rolled over midnight UTC daily baseline: ${prev_baseline:.2f} -> ${self.daily_starting_equity:.2f} for date {utc_today}.")
+            return True
+        return False
 
     def update_equity(self, equity: float):
         """Monitors equity and trips the daily drawdown circuit breaker if threshold breached."""

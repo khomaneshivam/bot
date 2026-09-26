@@ -154,15 +154,25 @@ class MLEngine:
         unique_val = set(np.unique(y_val))
 
         if unique_val.issubset(unique_train) and len(unique_val) >= 2:
-            try:
-                self.calibrated_model = CalibratedClassifierCV(
-                    estimator=self.base_model,
-                    method="sigmoid",
-                    cv="prefit"
-                )
-                self.calibrated_model.fit(X_val_s, y_val)
-            except Exception:
-                self.calibrated_model = None
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                try:
+                    try:
+                        from sklearn.frozen import FrozenEstimator
+                        self.calibrated_model = CalibratedClassifierCV(
+                            estimator=FrozenEstimator(self.base_model),
+                            method="sigmoid"
+                        )
+                    except ImportError:
+                        self.calibrated_model = CalibratedClassifierCV(
+                            estimator=self.base_model,
+                            method="sigmoid",
+                            cv="prefit"
+                        )
+                    self.calibrated_model.fit(X_val_s, y_val)
+                except Exception:
+                    self.calibrated_model = None
         else:
             self.calibrated_model = None
 
