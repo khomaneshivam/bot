@@ -24,6 +24,8 @@ from bot.execution.trade_ledger import trade_ledger
 from bot.ai.audit_scanner import market_audit_scanner
 from bot.data.news_feed import news_feed_engine
 from bot.risk.psychology_guard import psychology_guard
+from bot.risk.circuit_breakers import circuit_breaker_manager
+from bot.execution.service import execution_service
 
 class BotManager:
     def __init__(self):
@@ -201,10 +203,7 @@ class BotManager:
 
                 closed_ids = execution_engine.update_positions_and_check_exits(current_ticks)
                 if closed_ids:
-                    if settings.AUTO_RETRAIN_ON_WRONG_TRADE and ml_engine.wrong_trades:
-                        self.log_event("INFO", f"Wrong trade exited ➔ Retraining AI model on mistake pattern ({len(ml_engine.wrong_trades)} learned)...", "AI_LEARN")
-                        await asyncio.to_thread(ml_engine.train_on_data, df)
-                        self.log_event("SUCCESS", f"AI Model retrained! Negative Shield active with {len(ml_engine.wrong_trades)} learned patterns.", "AI_LEARN")
+                    self.log_event("INFO", f"Closed {len(closed_ids)} position(s). Execution forensics logged.", "TRADE_EXIT")
 
                 # 4. Multi-Pair Autonomous Opportunity Execution via 1-Minute Audit Scanner
                 if settings.AUTONOMOUS_ENABLED and not risk_manager.daily_drawdown_limit_hit:
@@ -369,7 +368,10 @@ class BotManager:
             "candles": candles_list,
             "audit_matrix": market_audit_scanner.get_latest_audit(),
             "news": news_feed_engine.get_news_telemetry(),
-            "psychology": psychology_guard.get_psychology_telemetry(account.get("balance", 100.0))
+            "psychology": psychology_guard.get_psychology_telemetry(account.get("balance", 100.0)),
+            "circuit_breakers": circuit_breaker_manager.get_status().dict(),
+            "broker_connected": execution_service.adapter.is_connected(),
+            "feed_fresh": market_feed.is_feed_fresh(self.active_symbol)
         }
 
 bot_manager = BotManager()

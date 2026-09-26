@@ -14,6 +14,13 @@ scikit-learn>=1.4.0
 # AI & LLM Engine
 google-generativeai>=0.4.0
 
+# Security & Authentication
+argon2-cffi>=23.1.0
+
+# Observability & Metrics
+prometheus-client>=0.20.0
+httpx>=0.27.0
+
 # Broker Execution
 # MetaTrader5 is official Windows C-extension for MT5 terminal
 MetaTrader5>=5.0.45; platform_system=="Windows"

@@ -64,9 +64,13 @@ class Settings:
     BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
     BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "True").lower() in ("true", "1", "yes")
     
-    # Web & Server Settings
-    SERVER_HOST = os.getenv("SERVER_HOST", "127.0.0.1")
-    SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    # Safety Controls
+    ALLOW_LIVE_TRADING: bool = os.getenv("ALLOW_LIVE_TRADING", "false").lower() in ("true", "1")
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    MAX_OPEN_POSITIONS_OVERALL: int = int(os.getenv("MAX_OPEN_POSITIONS_OVERALL", "3"))
+    MAX_OPEN_POSITIONS_PER_PAIR: int = int(os.getenv("MAX_OPEN_POSITIONS_PER_PAIR", "1"))
+
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() == "production"
 
 settings = Settings()
