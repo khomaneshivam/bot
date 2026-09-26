@@ -38,11 +38,10 @@ else
 fi
 
 # 3. Configure Basic Firewall (UFW)
-echo "🛡️ Configuring Firewall rules (Ports: 22, 80, 443, 8000)..."
+echo "🛡️ Configuring Firewall rules (Ports: 22, 80, 443 - Port 8000 is internal only)..."
 sudo ufw allow 22/tcp comment 'SSH'
 sudo ufw allow 80/tcp comment 'HTTP'
 sudo ufw allow 443/tcp comment 'HTTPS'
-sudo ufw allow 8000/tcp comment 'QuantAI Dashboard & API'
 sudo ufw --force enable
 
 echo "=========================================================="

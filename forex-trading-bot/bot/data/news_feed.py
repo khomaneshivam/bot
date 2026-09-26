@@ -216,8 +216,8 @@ class NewsFeedEngine:
         return {
             "feed_status": self.feed_status,
             "articles_count": len(articles),
-            "articles": [a.dict() for a in articles[:10]],
-            "macro_events": [e.dict() for e in self.scheduled_macro_events]
+            "articles": [a.model_dump() if hasattr(a, "model_dump") else a.dict() for a in articles[:10]],
+            "macro_events": [e.model_dump() if hasattr(e, "model_dump") else e.dict() for e in self.scheduled_macro_events]
         }
 
 news_feed = NewsFeedEngine()

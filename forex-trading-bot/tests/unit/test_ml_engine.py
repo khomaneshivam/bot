@@ -64,25 +64,31 @@ def test_model_promotion_gates():
     promoted = model_registry.promote_challenger(bad_meta.id, min_accuracy=55.0, max_brier_score=0.25)
     assert promoted is False
 
-def test_negative_pattern_shield():
-    # Log a fake losing trade
-    trade_id = "loss_test_1"
-    vec = np.ones(36, dtype=np.float32)
-    ml_engine.log_wrong_trade(
-        trade_id=trade_id,
-        symbol="EURUSD",
-        direction="BUY",
-        entry_price=1.0850,
-        exit_price=1.0800,
-        pnl=-50.0,
-        strategy_used="TestStrategy",
-        market_regime="TRENDING_UP",
-        features_at_entry=vec
-    )
+def test_negative_pattern_shield(monkeypatch):
+    monkeypatch.setattr(ml_engine, "_save_memory", lambda: None)
+    original_trades = list(ml_engine.wrong_trades)
+    original_vectors = list(ml_engine.wrong_trade_vectors)
+    try:
+        # Log a fake losing trade
+        trade_id = "loss_test_1"
+        vec = np.ones(36, dtype=np.float32)
+        ml_engine.log_wrong_trade(
+            trade_id=trade_id,
+            symbol="EURUSD",
+            direction="BUY",
+            entry_price=1.0850,
+            exit_price=1.0800,
+            pnl=-50.0,
+            strategy_used="TestStrategy",
+            market_regime="TRENDING_UP",
+            features_at_entry=vec
+        )
 
-    # Fake current row matching vector
-    row = pd.Series({"rsi_14": 75.0, "adx": 30.0, "atr_14": 0.0015})
-    # Evaluate shield directly with matching vector
-    norm = np.linalg.norm(vec)
-    sim = np.dot(vec, vec) / (norm * norm)
-    assert sim >= 0.99
+        # Fake current row matching vector
+        norm = np.linalg.norm(vec)
+        sim = np.dot(vec, vec) / (norm * norm)
+        assert sim >= 0.99
+    finally:
+        ml_engine.wrong_trades = original_trades
+        ml_engine.wrong_trade_vectors = original_vectors
+

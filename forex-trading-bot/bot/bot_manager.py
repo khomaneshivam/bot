@@ -369,7 +369,7 @@ class BotManager:
             "audit_matrix": market_audit_scanner.get_latest_audit(),
             "news": news_feed_engine.get_news_telemetry(),
             "psychology": psychology_guard.get_psychology_telemetry(account.get("balance", 100.0)),
-            "circuit_breakers": circuit_breaker_manager.get_status().dict(),
+            "circuit_breakers": circuit_breaker_manager.get_status().model_dump() if hasattr(circuit_breaker_manager.get_status(), "model_dump") else circuit_breaker_manager.get_status().dict(),
             "broker_connected": execution_service.adapter.is_connected(),
             "feed_fresh": market_feed.is_feed_fresh(self.active_symbol)
         }
