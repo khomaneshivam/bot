@@ -112,14 +112,19 @@ tests/unit/test_risk_manager.py::test_stale_market_feed_vetoes_trade PASSED
 tests/unit/test_risk_manager.py::test_trailing_stop_tightens_only_in_profit PASSED
 tests/unit/test_sizing.py::test_forex_position_sizing_standard_lot PASSED
 tests/unit/test_sizing.py::test_crypto_position_sizing_btc PASSED
+tests/integration/test_storage_unification.py::test_trade_ledger_mysql_read_write_parity PASSED
+tests/integration/test_storage_unification.py::test_connection_pool_active_reuse PASSED
+tests/integration/test_storage_unification.py::test_database_fail_closed_on_unreachable_host PASSED
+tests/integration/test_storage_unification.py::test_account_snapshot_recording PASSED
+tests/integration/test_storage_unification.py::test_midnight_utc_rollover_clears_drawdown_limit PASSED
 tests/unit/test_sizing.py::test_zero_stop_distance_returns_zero PASSED
 tests/unit/test_sizing.py::test_leverage_limit_capping PASSED
 
-====================== 34 passed in 17.11s =======================
+====================== 39 passed in 20.61s =======================
 ```
 
-- **Tests Total**: 34
-- **Tests Passed**: 34 (100%)
+- **Tests Total**: 39
+- **Tests Passed**: 39 (100%)
 - **Tests Failing**: 0
 
 ---
@@ -153,6 +158,13 @@ tests/unit/test_sizing.py::test_leverage_limit_capping PASSED
 | LLM cannot bypass deterministic risk | **VERIFIED** | Advisory design in `bot/ai/agent.py` |
 | Audit ledger tracks sensitive actions | **VERIFIED** | `test_rbac_admin_permissions` |
 | Prometheus metrics exported | **VERIFIED** | `/metrics` endpoint in `server/app.py` |
+| Single persistent MySQL storage engine | **VERIFIED** | `tests/integration/test_storage_unification.py` |
+| TradeLedger MySQL parity (Zero split-brain) | **VERIFIED** | `test_trade_ledger_mysql_read_write_parity` |
+| Fail-closed database policy | **VERIFIED** | `test_database_fail_closed_on_unreachable_host` |
+| MySQL thread-safe connection pooling | **VERIFIED** | `test_connection_pool_active_reuse` |
+| Midnight UTC daily equity baseline rollover | **VERIFIED** | `test_midnight_utc_rollover_clears_drawdown_limit` |
+| Periodic account snapshots persisted | **VERIFIED** | `test_account_snapshot_recording` |
+| Docker Compose official MySQL 8.0 topology | **VERIFIED** | `docker-compose.prod.yml` service container |
 | Hardened non-root Dockerfile | **VERIFIED** | UID 1000 in `Dockerfile` |
 | Automated CI test gate | **VERIFIED** | `pytest` step in `.github/workflows/deploy.yml` |
 | Zero production secrets committed | **VERIFIED** | Verified `.gitignore` and `.env.example` templates |

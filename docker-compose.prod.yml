@@ -1,6 +1,30 @@
 version: '3.8'
 
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: quantai_mysql_db
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-@Shivam930738}
+      MYSQL_DATABASE: ${DB_NAME:-trading_bot_db}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - trading_net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+
   quantai-bot:
     build:
       context: ./forex-trading-bot
@@ -15,12 +39,21 @@ services:
       - SERVER_PORT=8000
       - ENVIRONMENT=production
       - ALLOW_LIVE_TRADING=false
+      - DB_BACKEND=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=trading_bot_db
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD:-@Shivam930738}
     env_file:
       - ./forex-trading-bot/.env
     volumes:
       - trading_data:/app/data
     networks:
       - trading_net
+    depends_on:
+      mysql:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -50,6 +83,8 @@ services:
 
 volumes:
   trading_data:
+    driver: local
+  mysql_data:
     driver: local
 
 networks:
