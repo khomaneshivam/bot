@@ -32,7 +32,7 @@ def setup_test_environment():
 
 @pytest.fixture(autouse=True)
 def clean_safety_state():
-    """Ensures each test starts and ends with clean circuit breakers and risk state."""
+    """Ensures each test starts and ends with clean circuit breakers, risk state, and empty active positions."""
     from bot.risk.circuit_breakers import circuit_breaker_manager
     from bot.risk.risk_manager import risk_manager
     from bot.execution.reconciliation import reconciliation_service
@@ -41,11 +41,31 @@ def clean_safety_state():
     reconciliation_service.has_active_mismatch = False
     risk_manager.reset_daily_baseline(10000.0)
 
+    try:
+        conn = db.get_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM active_positions")
+        cur.execute("DELETE FROM reconciliation_incidents")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
     yield
 
     circuit_breaker_manager.reset_all()
     reconciliation_service.has_active_mismatch = False
     risk_manager.reset_daily_baseline(10000.0)
+
+    try:
+        conn = db.get_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM active_positions")
+        cur.execute("DELETE FROM reconciliation_incidents")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 @pytest.fixture
 def admin_token():

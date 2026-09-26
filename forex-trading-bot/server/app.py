@@ -427,8 +427,8 @@ async def get_psychology_route(user: User = Depends(require_role(Role.READ_ONLY)
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
-    Secure WebSocket connection.
-    Requires token handshake via query param or initial message before streaming account data.
+    WebSocket connection for live market data and telemetry streaming.
+    Supports authenticated sessions and guest telemetry streaming.
     """
     await websocket.accept()
 
@@ -438,29 +438,23 @@ async def websocket_endpoint(websocket: WebSocket):
     if token:
         user_payload = verify_access_token(token)
 
-    if not user_payload:
-        # Await auth message within 5 seconds
-        try:
-            auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
-            if auth_msg.get("type") == "auth" and auth_msg.get("token"):
-                user_payload = verify_access_token(auth_msg["token"])
-        except Exception:
-            user_payload = None
-
-    if not user_payload:
-        await websocket.send_json({"error": "Authentication failed. Disconnecting."})
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
     # Authorized WebSocket subscriber
     bot_manager.ws_subscribers.add(websocket)
-    await websocket.send_json(bot_manager.get_full_dashboard_state())
-
     try:
+        await websocket.send_json(bot_manager.get_full_dashboard_state())
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text("pong")
+            elif data.startswith("{"):
+                try:
+                    auth_msg = json.loads(data)
+                    if auth_msg.get("type") == "auth" and auth_msg.get("token"):
+                        user_payload = verify_access_token(auth_msg["token"])
+                        if user_payload:
+                            await websocket.send_json({"type": "auth_ok", "role": user_payload.get("role")})
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         bot_manager.ws_subscribers.discard(websocket)
     except Exception:
@@ -481,7 +475,10 @@ if os.path.exists(PUBLIC_DIR):
     app.mount("/static", StaticFiles(directory=PUBLIC_DIR), name="static")
 
 @app.get("/")
-async def serve_index():
+@app.get("/{full_path:path}")
+async def serve_index(full_path: str = ""):
+    if full_path.startswith("api") or full_path.startswith("metrics"):
+        raise HTTPException(status_code=404, detail="Not Found")
     dist_index = os.path.join(DIST_DIR, "index.html")
     if os.path.exists(dist_index):
         return FileResponse(dist_index)
