@@ -5,26 +5,34 @@
 
 const API_BASE = "";
 
+const getHeaders = (extra = {}) => {
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("quant_auth_token") : null;
+  return {
+    ...extra,
+    ...(token ? { "Authorization": `Bearer ${token}` } : {})
+  };
+};
+
 export const api = {
   // Account & Engine Telemetry
   async getStatus() {
-    const res = await fetch(`${API_BASE}/api/status`);
+    const res = await fetch(`${API_BASE}/api/status`, { headers: getHeaders() });
     return res.json();
   },
 
   async resetCapital() {
-    const res = await fetch(`${API_BASE}/api/account/reset`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/account/reset`, { method: "POST", headers: getHeaders() });
     return res.json();
   },
 
   // All Trades Ledger
   async getAllTrades() {
-    const res = await fetch(`${API_BASE}/api/trades/all`);
+    const res = await fetch(`${API_BASE}/api/trades/all`, { headers: getHeaders() });
     return res.json();
   },
 
   async getTradeDetails(tradeId) {
-    const res = await fetch(`${API_BASE}/api/trade/${tradeId}`);
+    const res = await fetch(`${API_BASE}/api/trade/${tradeId}`, { headers: getHeaders() });
     return res.json();
   },
 
@@ -34,35 +42,35 @@ export const api = {
 
   // 1-Minute Multi-Pair Multi-Strategy Audit
   async getAuditMatrix() {
-    const res = await fetch(`${API_BASE}/api/audit/matrix`);
+    const res = await fetch(`${API_BASE}/api/audit/matrix`, { headers: getHeaders() });
     return res.json();
   },
 
   async runAuditScan() {
-    const res = await fetch(`${API_BASE}/api/audit/run`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/audit/run`, { method: "POST", headers: getHeaders() });
     return res.json();
   },
 
   // Bot & Execution Controls
   async startBot() {
-    const res = await fetch(`${API_BASE}/api/bot/start`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/bot/start`, { method: "POST", headers: getHeaders() });
     return res.json();
   },
 
   async stopBot() {
-    const res = await fetch(`${API_BASE}/api/bot/stop`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/bot/stop`, { method: "POST", headers: getHeaders() });
     return res.json();
   },
 
   async emergencyStop() {
-    const res = await fetch(`${API_BASE}/api/emergency-stop`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/emergency-stop`, { method: "POST", headers: getHeaders() });
     return res.json();
   },
 
   async switchMode(mode) {
     const res = await fetch(`${API_BASE}/api/mode`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ mode }),
     });
     return res.json();
@@ -71,7 +79,7 @@ export const api = {
   async switchSymbol(symbol) {
     const res = await fetch(`${API_BASE}/api/symbol`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ symbol }),
     });
     return res.json();
@@ -80,7 +88,7 @@ export const api = {
   async placeManualTrade(direction) {
     const res = await fetch(`${API_BASE}/api/trade/manual`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ direction }),
     });
     return res.json();
@@ -89,31 +97,31 @@ export const api = {
   async closePosition(positionId) {
     const res = await fetch(`${API_BASE}/api/position/close`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ position_id: positionId }),
     });
     return res.json();
   },
 
   async triggerRetrain() {
-    const res = await fetch(`${API_BASE}/api/retrain`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/api/retrain`, { method: "POST", headers: getHeaders() });
     return res.json();
   },
 
   async getWrongTrades() {
-    const res = await fetch(`${API_BASE}/api/wrong-trades`);
+    const res = await fetch(`${API_BASE}/api/wrong-trades`, { headers: getHeaders() });
     return res.json();
   },
 
   // News, Gold Catalysts & Macro Radar
   async getNews() {
-    const res = await fetch(`${API_BASE}/api/news`);
+    const res = await fetch(`${API_BASE}/api/news`, { headers: getHeaders() });
     return res.json();
   },
 
   // 20+ Year Trader Psychology & Tilt Guard
   async getPsychology() {
-    const res = await fetch(`${API_BASE}/api/psychology`);
+    const res = await fetch(`${API_BASE}/api/psychology`, { headers: getHeaders() });
     return res.json();
   },
 };

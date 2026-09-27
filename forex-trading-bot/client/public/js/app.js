@@ -38,6 +38,15 @@ class QuantAITerminal {
     this.fetchAndRenderAllTrades();
   }
 
+  getAuthHeaders(extra = {}) {
+    const headers = { ...extra };
+    const token = localStorage.getItem("quant_auth_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
   /* ==========================================================================
      WebSocket Telemetry Stream & Reconnection
      ========================================================================== */
@@ -819,7 +828,7 @@ class QuantAITerminal {
     try {
       const resp = await fetch("/api/mode", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ mode })
       });
       const data = await resp.json();
@@ -843,7 +852,7 @@ class QuantAITerminal {
     try {
       const resp = await fetch("/api/symbol", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ symbol })
       });
       const result = await resp.json();
@@ -861,7 +870,10 @@ class QuantAITerminal {
 
   async startBot() {
     try {
-      await fetch("/api/bot/start", { method: "POST" });
+      await fetch("/api/bot/start", {
+        method: "POST",
+        headers: this.getAuthHeaders()
+      });
     } catch (e) {
       console.error("Error starting bot:", e);
     }
@@ -869,7 +881,10 @@ class QuantAITerminal {
 
   async stopBot() {
     try {
-      await fetch("/api/bot/stop", { method: "POST" });
+      await fetch("/api/bot/stop", {
+        method: "POST",
+        headers: this.getAuthHeaders()
+      });
     } catch (e) {
       console.error("Error stopping bot:", e);
     }
@@ -879,7 +894,7 @@ class QuantAITerminal {
     try {
       const resp = await fetch("/api/trade/manual", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ direction })
       });
       const data = await resp.json();
@@ -895,7 +910,7 @@ class QuantAITerminal {
     try {
       await fetch("/api/position/close", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ position_id: positionId })
       });
     } catch (e) {
@@ -909,7 +924,10 @@ class QuantAITerminal {
     btn.disabled = true;
 
     try {
-      const resp = await fetch("/api/retrain", { method: "POST" });
+      const resp = await fetch("/api/retrain", {
+        method: "POST",
+        headers: this.getAuthHeaders()
+      });
       const data = await resp.json();
       btn.innerHTML = `<span class="btn-icon">✅</span> Trained (${data.accuracy}%)`;
       setTimeout(() => {
@@ -925,7 +943,10 @@ class QuantAITerminal {
 
   async emergencyStop() {
     try {
-      await fetch("/api/emergency-stop", { method: "POST" });
+      await fetch("/api/emergency-stop", {
+        method: "POST",
+        headers: this.getAuthHeaders()
+      });
     } catch (e) {
       console.error("Error in emergency stop:", e);
     }
@@ -977,7 +998,9 @@ class QuantAITerminal {
 
   async fetchAuditMatrix() {
     try {
-      const resp = await fetch("/api/audit/matrix");
+      const resp = await fetch("/api/audit/matrix", {
+        headers: this.getAuthHeaders()
+      });
       if (resp.ok) {
         const matrix = await resp.json();
         this.updateAuditMatrix(matrix);
@@ -994,7 +1017,10 @@ class QuantAITerminal {
       btn.innerHTML = `<span class="btn-icon">⏳</span> Scanning...`;
     }
     try {
-      const resp = await fetch("/api/audit/run", { method: "POST" });
+      const resp = await fetch("/api/audit/run", {
+        method: "POST",
+        headers: this.getAuthHeaders()
+      });
       if (resp.ok) {
         const matrix = await resp.json();
         this.updateAuditMatrix(matrix);
@@ -1156,62 +1182,81 @@ class QuantAITerminal {
   /* ==========================================================================
      All Trades Ledger & Exhaustive Tracking
      ========================================================================== */
+  processLedgerKPIs(openPos, closed) {
+    this.allTradesCache = [...openPos, ...closed];
+
+    // Update Ledger KPIs
+    const total = this.allTradesCache.length;
+    const openCount = openPos.length;
+    const closedCount = closed.length;
+    const wins = closed.filter(t => (t.pnl || 0) >= 0).length;
+    const losses = closed.filter(t => (t.pnl || 0) < 0).length;
+    const winRate = closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : "0.0";
+    const netPnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
+    const grossProfit = closed.filter(t => (t.pnl || 0) > 0).reduce((acc, t) => acc + t.pnl, 0);
+    const grossLoss = Math.abs(closed.filter(t => (t.pnl || 0) < 0).reduce((acc, t) => acc + t.pnl, 0));
+    const pf = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? "MAX" : "1.00");
+
+    // KPI Display
+    const elTotal = document.getElementById("ledger-kpi-total-trades");
+    if (elTotal) elTotal.innerText = total;
+    const elSub = document.getElementById("ledger-kpi-open-closed-sub");
+    if (elSub) elSub.innerText = `${openCount} Open · ${closedCount} Closed`;
+
+    const elWr = document.getElementById("ledger-kpi-winrate");
+    if (elWr) elWr.innerText = `${winRate}%`;
+    const elWlSub = document.getElementById("ledger-kpi-wins-losses-sub");
+    if (elWlSub) elWlSub.innerText = `${wins} Wins · ${losses} Losses`;
+
+    const elPnl = document.getElementById("ledger-kpi-net-pnl");
+    if (elPnl) {
+      elPnl.innerText = `${netPnl >= 0 ? "+" : ""}$${netPnl.toFixed(2)}`;
+      elPnl.className = netPnl >= 0 ? "ledger-kpi-val text-green" : "ledger-kpi-val text-red";
+    }
+
+    const elPf = document.getElementById("ledger-kpi-pf");
+    if (elPf) elPf.innerText = pf;
+
+    // Filter Counts
+    const cAll = document.getElementById("count-filter-all");
+    if (cAll) cAll.innerText = total;
+    const cOpen = document.getElementById("count-filter-open");
+    if (cOpen) cOpen.innerText = openCount;
+    const cWins = document.getElementById("count-filter-wins");
+    if (cWins) cWins.innerText = wins;
+    const cLosses = document.getElementById("count-filter-losses");
+    if (cLosses) cLosses.innerText = losses;
+
+    // Render Table
+    this.renderFilteredLedger();
+  }
+
   async fetchAndRenderAllTrades() {
     try {
-      const resp = await fetch("/api/trades/all");
-      const data = await resp.json();
-      if (data.status === "success") {
-        const openPos = (data.open_positions || []).map(p => ({ ...p, is_open: true }));
-        const closed = (data.closed_trades || []).map(c => ({ ...c, is_open: false }));
-        this.allTradesCache = [...openPos, ...closed];
-
-        // Update Ledger KPIs
-        const total = this.allTradesCache.length;
-        const openCount = openPos.length;
-        const closedCount = closed.length;
-        const wins = closed.filter(t => (t.pnl || 0) >= 0).length;
-        const losses = closed.filter(t => (t.pnl || 0) < 0).length;
-        const winRate = closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : "0.0";
-        const netPnl = closed.reduce((acc, t) => acc + (t.pnl || 0), 0);
-        const grossProfit = closed.filter(t => (t.pnl || 0) > 0).reduce((acc, t) => acc + t.pnl, 0);
-        const grossLoss = Math.abs(closed.filter(t => (t.pnl || 0) < 0).reduce((acc, t) => acc + t.pnl, 0));
-        const pf = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? "MAX" : "1.00");
-
-        // KPI Display
-        const elTotal = document.getElementById("ledger-kpi-total-trades");
-        if (elTotal) elTotal.innerText = total;
-        const elSub = document.getElementById("ledger-kpi-open-closed-sub");
-        if (elSub) elSub.innerText = `${openCount} Open · ${closedCount} Closed`;
-
-        const elWr = document.getElementById("ledger-kpi-winrate");
-        if (elWr) elWr.innerText = `${winRate}%`;
-        const elWlSub = document.getElementById("ledger-kpi-wins-losses-sub");
-        if (elWlSub) elWlSub.innerText = `${wins} Wins · ${losses} Losses`;
-
-        const elPnl = document.getElementById("ledger-kpi-net-pnl");
-        if (elPnl) {
-          elPnl.innerText = `${netPnl >= 0 ? "+" : ""}$${netPnl.toFixed(2)}`;
-          elPnl.className = netPnl >= 0 ? "ledger-kpi-val text-green" : "ledger-kpi-val text-red";
+      const resp = await fetch("/api/trades/all", {
+        headers: this.getAuthHeaders()
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.status === "success") {
+          const openPos = (data.open_positions || []).map(p => ({ ...p, is_open: true }));
+          const closed = (data.closed_trades || []).map(c => ({ ...c, is_open: false }));
+          this.processLedgerKPIs(openPos, closed);
+          return;
         }
-
-        const elPf = document.getElementById("ledger-kpi-pf");
-        if (elPf) elPf.innerText = pf;
-
-        // Filter Counts
-        const cAll = document.getElementById("count-filter-all");
-        if (cAll) cAll.innerText = total;
-        const cOpen = document.getElementById("count-filter-open");
-        if (cOpen) cOpen.innerText = openCount;
-        const cWins = document.getElementById("count-filter-wins");
-        if (cWins) cWins.innerText = wins;
-        const cLosses = document.getElementById("count-filter-losses");
-        if (cLosses) cLosses.innerText = losses;
-
-        // Render Table
-        this.renderFilteredLedger();
+      }
+      // Fallback from live telemetry state
+      if (this.state) {
+        const openPos = (this.state.open_positions || []).map(p => ({ ...p, is_open: true }));
+        const closed = (this.state.closed_trades || []).map(c => ({ ...c, is_open: false }));
+        this.processLedgerKPIs(openPos, closed);
       }
     } catch (err) {
-      console.error("Error fetching all trades ledger:", err);
+      if (this.state) {
+        const openPos = (this.state.open_positions || []).map(p => ({ ...p, is_open: true }));
+        const closed = (this.state.closed_trades || []).map(c => ({ ...c, is_open: false }));
+        this.processLedgerKPIs(openPos, closed);
+      }
     }
   }
 
@@ -1320,7 +1365,10 @@ class QuantAITerminal {
     if (!confirmReset) return;
 
     try {
-      const resp = await fetch("/api/account/reset", { method: "POST" });
+      const resp = await fetch("/api/account/reset", {
+        method: "POST",
+        headers: this.getAuthHeaders()
+      });
       const data = await resp.json();
       if (data.status === "success") {
         this.fetchAndRenderAllTrades();

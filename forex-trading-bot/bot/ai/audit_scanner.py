@@ -85,7 +85,9 @@ class MarketAuditScanner:
         ai_sig, ai_conf = "HOLD", 0.0
         if ml_engine.is_trained:
             try:
-                ai_sig, ai_conf = ml_engine.predict_signal(curr)
+                ai_res = ml_engine.predict_signal(curr)
+                ai_sig = ai_res[0] if len(ai_res) > 0 else "HOLD"
+                ai_conf = ai_res[1] if len(ai_res) > 1 else 0.0
             except Exception:
                 ai_sig, ai_conf = "HOLD", 0.0
 

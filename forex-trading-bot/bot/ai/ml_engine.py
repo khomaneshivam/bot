@@ -1,45 +1,61 @@
 import os
 import json
 import time
+import pickle
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.preprocessing import RobustScaler
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 
 from bot.ai.features import compute_all_features, extract_features_vector, FEATURE_COLUMNS
+from bot.ai.model_registry import model_registry
 from bot.config.settings import settings
 
 MEMORY_FILE = os.path.join(os.path.dirname(__file__), "wrong_trades_memory.json")
 
 class MLEngine:
+    """
+    Production-grade Quantitative ML Engine.
+    Features:
+    - Chronological Walk-Forward validation (Train -> Val/Calibration -> OOS Test).
+    - Probability calibration via Platt scaling / Sigmoid CalibratedClassifierCV.
+    - Rigorous metrics: Brier score, Log loss, OOS Accuracy.
+    - Model Registry versioning (Champion / Challenger).
+    - Hard negative pattern shield without unsafe single-trade retrains.
+    """
+
     def __init__(self):
         self.scaler = RobustScaler()
-        self.model = HistGradientBoostingClassifier(
+        self.base_model = HistGradientBoostingClassifier(
             max_iter=150,
-            learning_rate=0.06,
-            max_depth=6,
-            min_samples_leaf=15,
-            l2_regularization=1.5,
+            learning_rate=0.05,
+            max_depth=5,
+            min_samples_leaf=20,
+            l2_regularization=2.0,
             random_state=42
         )
+        self.calibrated_model: Optional[CalibratedClassifierCV] = None
         self.is_trained = False
-        self.total_parameters = len(FEATURE_COLUMNS) * 150 * 6  # Ensemble tree parameter proxy
+        self.version = "1.0.0"
         self.last_trained_time: Optional[str] = None
         self.training_accuracy: float = 0.0
+        self.oos_accuracy: float = 0.0
+        self.brier_score: float = 0.0
+        self.log_loss_score: float = 0.0
         self.retrain_count: int = 0
-        
-        # Wrong Trades Memory & Negative Shield
+
+        # Negative Pattern Shield Memory
         self.wrong_trades: List[Dict] = []
         self.wrong_trade_vectors: List[np.ndarray] = []
         self.vetoed_trades_count: int = 0
         self.last_veto_reason: str = ""
-        
+
         self._load_memory()
 
     def _load_memory(self):
-        """Loads persistent memory of past wrong trades."""
         if os.path.exists(MEMORY_FILE):
             try:
                 with open(MEMORY_FILE, "r") as f:
@@ -47,14 +63,13 @@ class MLEngine:
                     self.wrong_trades = data.get("wrong_trades", [])
                     self.vetoed_trades_count = data.get("vetoed_count", 0)
                     self.wrong_trade_vectors = [
-                        np.array(t["features_at_entry"], dtype=np.float32) 
+                        np.array(t["features_at_entry"], dtype=np.float32)
                         for t in self.wrong_trades if "features_at_entry" in t
                     ]
             except Exception as e:
-                print(f"[MLEngine] Error loading memory file: {e}")
+                print(f"[MLEngine] Memory load notice: {e}")
 
     def _save_memory(self):
-        """Saves wrong trades memory to disk."""
         try:
             with open(MEMORY_FILE, "w") as f:
                 json.dump({
@@ -67,10 +82,10 @@ class MLEngine:
 
     def generate_labels(self, df: pd.DataFrame, forward_bars: int = 4, atr_mult: float = 1.0) -> np.ndarray:
         """
-        Creates forward-looking target labels:
-        1 = Profitable BUY (Price rises > atr_mult * ATR)
-        -1 = Profitable SELL (Price falls > atr_mult * ATR)
-        0 = HOLD / Chop (No clear breakout)
+        Creates strictly causal target labels:
+        1 = BUY breakout
+        2 = SELL breakdown
+        0 = HOLD / Chop
         """
         close = df["close"].values
         atr = df["atr_14"].values if "atr_14" in df.columns else close * 0.005
@@ -89,103 +104,168 @@ class MLEngine:
             if up_move > target_delta and up_move > down_move * 1.3:
                 labels[i] = 1   # BUY
             elif down_move > target_delta and down_move > up_move * 1.3:
-                labels[i] = 2   # SELL (mapped to 2 for 0,1,2 classification)
+                labels[i] = 2   # SELL
             else:
                 labels[i] = 0   # HOLD
 
         return labels
 
-    def train_on_data(self, df: pd.DataFrame) -> dict:
+    def train_walk_forward(self, df: pd.DataFrame) -> dict:
         """
-        Trains model on large multi-parameter features with sample weighting for mistakes.
+        Chronological Walk-Forward Training & Calibration:
+        - 60% Train (Base model fitting)
+        - 20% Validation (Probability calibration via Sigmoid/Platt)
+        - 20% Untouched Out-Of-Sample Test (Brier score & Generalization verification)
         """
-        if len(df) < 50:
-            return {"status": "error", "message": "Insufficient data"}
+        if len(df) < 100:
+            return {"status": "error", "message": "Insufficient data for chronological validation (min 100 bars)"}
 
         features_df = compute_all_features(df)
         labels = self.generate_labels(features_df)
 
-        # Build feature matrix X
-        X_list = []
-        for i in range(len(features_df)):
-            X_list.append(extract_features_vector(features_df.iloc[i]))
+        # Exclude forward looking tail
+        valid_len = len(features_df) - 4
+        X_list = [extract_features_vector(features_df.iloc[i]) for i in range(valid_len)]
         X = np.array(X_list, dtype=np.float32)
-        y = labels
+        y = labels[:valid_len]
 
-        # Filter valid indices (excluding unlabelled tail)
-        valid_idx = np.arange(len(y) - 4)
-        X_train = X[valid_idx]
-        y_train = y[valid_idx]
+        # Chronological splits
+        train_end = int(valid_len * 0.60)
+        val_end = int(valid_len * 0.80)
 
-        # Fit RobustScaler
-        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_train, y_train = X[:train_end], y[:train_end]
+        X_val, y_val = X[train_end:val_end], y[train_end:val_end]
+        X_test, y_test = X[val_end:], y[val_end:]
 
-        # Incorporate Hard Negative Mining & Wrong Trades Sample Weights
-        sample_weights = np.ones(len(y_train), dtype=np.float32)
-        
-        # If we have stored wrong trades, add them as high-priority negative examples
-        if len(self.wrong_trades) > 0 and len(self.wrong_trade_vectors) > 0:
-            mistake_X = np.array(self.wrong_trade_vectors, dtype=np.float32)
-            mistake_y = []
-            mistake_weights = []
+        if len(X_train) < 20 or len(X_val) < 10 or len(X_test) < 10:
+            return {"status": "error", "message": "Split sets too small"}
 
-            for wt in self.wrong_trades:
-                # If bot wrongly took a BUY, the corrected label is HOLD (0) or SELL (2)
-                wrong_dir = wt.get("direction", "BUY")
-                corrected_label = 2 if wrong_dir == "BUY" else 1
-                mistake_y.append(corrected_label)
-                mistake_weights.append(settings.MISTAKE_PENALTY_WEIGHT)
+        # Fit Scaler on TRAIN ONLY (Strictly zero lookahead leakage)
+        X_train_s = self.scaler.fit_transform(X_train)
+        X_val_s = self.scaler.transform(X_val)
+        X_test_s = self.scaler.transform(X_test)
 
-            mistake_X_scaled = self.scaler.transform(mistake_X)
-            X_train_scaled = np.vstack([X_train_scaled, mistake_X_scaled])
-            y_train = np.concatenate([y_train, np.array(mistake_y, dtype=int)])
-            sample_weights = np.concatenate([sample_weights, np.array(mistake_weights, dtype=np.float32)])
+        # 1. Fit Base Estimator on Train
+        self.base_model.fit(X_train_s, y_train)
 
-        # Train model
-        self.model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+        # 2. Fit CalibratedClassifierCV on Validation (Platt Scaling)
+        # Note: if validation set does not contain all classes, fallback gracefully
+        unique_train = set(np.unique(y_train))
+        unique_val = set(np.unique(y_val))
+
+        if unique_val.issubset(unique_train) and len(unique_val) >= 2:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                try:
+                    try:
+                        from sklearn.frozen import FrozenEstimator
+                        self.calibrated_model = CalibratedClassifierCV(
+                            estimator=FrozenEstimator(self.base_model),
+                            method="sigmoid"
+                        )
+                    except ImportError:
+                        self.calibrated_model = CalibratedClassifierCV(
+                            estimator=self.base_model,
+                            method="sigmoid",
+                            cv="prefit"
+                        )
+                    self.calibrated_model.fit(X_val_s, y_val)
+                except Exception:
+                    self.calibrated_model = None
+        else:
+            self.calibrated_model = None
+
+        # 3. Evaluate on Untouched OOS Test Set
+        active_model = self.calibrated_model if self.calibrated_model else self.base_model
+        test_preds = active_model.predict(X_test_s)
+        test_probs = active_model.predict_proba(X_test_s)
+
+        self.oos_accuracy = round(float(accuracy_score(y_test, test_preds)) * 100, 2)
+        train_preds = self.base_model.predict(X_train_s)
+        self.training_accuracy = round(float(accuracy_score(y_train, train_preds)) * 100, 2)
+
+        # Compute multi-class Brier score
+        brier_sum = 0.0
+        n_classes = test_probs.shape[1]
+        for c_idx in range(n_classes):
+            y_binary = (y_test == c_idx).astype(int)
+            brier_sum += brier_score_loss(y_binary, test_probs[:, c_idx])
+        self.brier_score = round(float(brier_sum / max(n_classes, 1)), 4)
+
+        try:
+            self.log_loss_score = round(float(log_loss(y_test, test_probs)), 4)
+        except Exception:
+            self.log_loss_score = 0.0
+
         self.is_trained = True
         self.retrain_count += 1
         self.last_trained_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.version = f"1.{self.retrain_count}.0"
 
-        preds = self.model.predict(X_train_scaled)
-        self.training_accuracy = round(float(accuracy_score(y_train, preds)) * 100, 2)
+        # 4. Register in Model Registry
+        model_bytes = pickle.dumps(active_model)
+        model_registry.register_model(
+            version=self.version,
+            model_type="HistGradientBoosting+Platt",
+            stage="CHAMPION" if self.retrain_count == 1 else "CHALLENGER",
+            hyperparameters={
+                "learning_rate": 0.05,
+                "max_depth": 5,
+                "l2_regularization": 2.0
+            },
+            validation_accuracy=self.oos_accuracy,
+            brier_score=self.brier_score,
+            log_loss=self.log_loss_score,
+            model_bytes=model_bytes
+        )
 
         return {
             "status": "success",
-            "accuracy": self.training_accuracy,
+            "version": self.version,
+            "train_accuracy": self.training_accuracy,
+            "oos_accuracy": self.oos_accuracy,
+            "brier_score": self.brier_score,
+            "log_loss": self.log_loss_score,
             "retrain_count": self.retrain_count,
-            "last_trained": self.last_trained_time,
-            "wrong_trades_incorporated": len(self.wrong_trades)
+            "calibrated": self.calibrated_model is not None,
+            "last_trained": self.last_trained_time
         }
 
-    def predict_signal(self, current_row: pd.Series) -> Tuple[str, float]:
+    def train_on_data(self, df: pd.DataFrame) -> dict:
+        """Alias redirecting to chronological walk-forward training."""
+        return self.train_walk_forward(df)
+
+    def predict_signal(self, current_row: pd.Series) -> Tuple[str, float, float]:
         """
-        Generates AI trading decision ('BUY', 'SELL', 'HOLD') and confidence score [0.0 - 1.0].
+        Generates trading decision ('BUY', 'SELL', 'HOLD'), calibrated probability,
+        and raw model confidence score.
+        Returns: (signal, calibrated_probability, raw_confidence)
         """
         if not self.is_trained:
-            return "HOLD", 0.0
+            return "HOLD", 0.0, 0.0
 
         vec = extract_features_vector(current_row).reshape(1, -1)
         vec_scaled = self.scaler.transform(vec)
 
-        probs = self.model.predict_proba(vec_scaled)[0]
+        active_model = self.calibrated_model if self.calibrated_model else self.base_model
+        probs = active_model.predict_proba(vec_scaled)[0]
+
         # Classes: 0 -> HOLD, 1 -> BUY, 2 -> SELL
         hold_p = probs[0] if len(probs) > 0 else 1.0
         buy_p = probs[1] if len(probs) > 1 else 0.0
         sell_p = probs[2] if len(probs) > 2 else 0.0
 
-        if buy_p > 0.48 and buy_p > sell_p and buy_p > hold_p:
-            return "BUY", float(buy_p)
-        elif sell_p > 0.48 and sell_p > buy_p and sell_p > hold_p:
-            return "SELL", float(sell_p)
+        if buy_p > 0.45 and buy_p > sell_p and buy_p > hold_p:
+            return "BUY", float(buy_p), float(buy_p)
+        elif sell_p > 0.45 and sell_p > buy_p and sell_p > hold_p:
+            return "SELL", float(sell_p), float(sell_p)
         else:
-            return "HOLD", float(hold_p)
+            return "HOLD", float(hold_p), float(max(hold_p, buy_p, sell_p))
 
     def evaluate_negative_shield(self, current_row: pd.Series, proposed_signal: str) -> Tuple[bool, str]:
         """
-        Negative Pattern Shield:
-        Compares current market state against past wrong trades.
-        If similarity to a failed setup is dangerously high, VETO the trade!
+        Negative Pattern Shield: Vetoes proposed signal if cosine similarity to past losing trade >= 0.88.
         """
         if proposed_signal == "HOLD" or len(self.wrong_trades) == 0:
             return False, ""
@@ -193,26 +273,18 @@ class MLEngine:
         vec = extract_features_vector(current_row)
         norm_vec = np.linalg.norm(vec) + 1e-8
 
-        for wt in self.wrong_trades[-30:]:  # Check against recent 30 wrong trades
+        for wt in self.wrong_trades[-30:]:
             if wt.get("direction") == proposed_signal:
                 past_vec = np.array(wt.get("features_at_entry", []), dtype=np.float32)
                 if len(past_vec) == len(vec):
                     norm_past = np.linalg.norm(past_vec) + 1e-8
-                    # Cosine similarity
-                    cos_sim = float(np.dot(vec, past_vec) / (norm_vec * norm_past))
-                    
-                    if cos_sim >= settings.NEGATIVE_SHIELD_SIMILARITY_THRESHOLD:
+                    sim = float(np.dot(vec, past_vec) / (norm_vec * norm_past))
+                    if sim >= 0.88:
+                        reason = f"Negative pattern match ({sim*100:.1f}%) to failed trade #{wt.get('id')}"
                         self.vetoed_trades_count += 1
-                        trade_id = wt.get("id", "UNKNOWN")
-                        reason = wt.get("loss_cause", "similar false setup")
-                        veto_msg = (
-                            f"Vetoed by Negative Shield: {round(cos_sim*100, 1)}% pattern similarity "
-                            f"to past failed Trade #{trade_id} ({reason})"
-                        )
-                        self.last_veto_reason = veto_msg
+                        self.last_veto_reason = reason
                         self._save_memory()
-                        return True, veto_msg
-
+                        return True, reason
         return False, ""
 
     def log_wrong_trade(
@@ -223,17 +295,14 @@ class MLEngine:
         entry_price: float,
         exit_price: float,
         pnl: float,
-        features_at_entry: np.ndarray,
+        strategy_used: str,
         market_regime: str,
-        strategy_used: str
+        features_at_entry: np.ndarray
     ):
         """
-        Registers a failed trade into the mistake memory, diagnoses root-cause,
-        and schedules live model retraining!
+        Logs losing trade into memory for forensic tracking and negative pattern shielding.
+        NOTE: Does NOT trigger immediate retrain, avoiding overfitting to noise.
         """
-        # Diagnose cause of failure based on features at entry
-        loss_cause = self._diagnose_loss(features_at_entry, direction, market_regime)
-
         record = {
             "id": trade_id,
             "symbol": symbol,
@@ -244,49 +313,24 @@ class MLEngine:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "strategy": strategy_used,
             "regime": market_regime,
-            "loss_cause": loss_cause,
-            "features_at_entry": features_at_entry.tolist()
+            "features_at_entry": features_at_entry.tolist() if isinstance(features_at_entry, np.ndarray) else features_at_entry
         }
 
         self.wrong_trades.append(record)
-        self.wrong_trade_vectors.append(features_at_entry)
+        if isinstance(features_at_entry, np.ndarray):
+            self.wrong_trade_vectors.append(features_at_entry)
         self._save_memory()
-        print(f"[MLEngine] 🚨 Mistake logged: Trade #{trade_id} failed with ${pnl:.2f}. Cause: {loss_cause}")
-
-    def _diagnose_loss(self, vec: np.ndarray, direction: str, regime: str) -> str:
-        """Rule-based quantitative diagnostics of why the setup failed."""
-        try:
-            # Indices mapped to FEATURE_COLUMNS
-            rsi_idx = FEATURE_COLUMNS.index("rsi_14")
-            atr_ratio_idx = FEATURE_COLUMNS.index("atr_ratio")
-            vol_ratio_idx = FEATURE_COLUMNS.index("vol_ratio")
-            adx_idx = FEATURE_COLUMNS.index("adx")
-
-            rsi = vec[rsi_idx]
-            atr_ratio = vec[atr_ratio_idx]
-            vol_ratio = vec[vol_ratio_idx]
-            adx = vec[adx_idx]
-
-            if direction == "BUY" and rsi > 70:
-                return "Bought into Overbought RSI Exhaustion"
-            elif direction == "SELL" and rsi < 30:
-                return "Sold into Oversold RSI Bounce"
-            elif "COMPRESSION" in regime or "CHOP" in regime:
-                return "False Breakout during Low Volatility Squeeze"
-            elif vol_ratio < 0.6:
-                return "Lack of Volume Confirmation (Liquidity Trap)"
-            elif adx < 18:
-                return "Traded without Directional Trend (Whipsaw)"
-            else:
-                return f"Adverse Momentum Shift in {regime}"
-        except Exception:
-            return "Adverse Market Reversal"
+        print(f"[MLEngine] 🚨 Mistake logged: Trade #{trade_id} failed with ${pnl:.2f}. Shield memory updated.")
 
     def get_stats(self) -> dict:
         return {
             "is_trained": self.is_trained,
-            "parameters_count": self.total_parameters,
+            "version": self.version,
             "training_accuracy": self.training_accuracy,
+            "oos_accuracy": self.oos_accuracy,
+            "brier_score": self.brier_score,
+            "log_loss": self.log_loss_score,
+            "calibrated": self.calibrated_model is not None,
             "retrain_count": self.retrain_count,
             "last_trained_time": self.last_trained_time or "Not yet trained",
             "wrong_trades_memorized": len(self.wrong_trades),

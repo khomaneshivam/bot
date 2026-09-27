@@ -1,69 +1,18 @@
-import os
-import sqlite3
 import json
 import time
 from typing import Dict, List, Optional
-
-DB_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
-DB_PATH = os.path.join(DB_DIR, "quant_trade_ledger.db")
+from bot.storage.db import db
 
 class TradeLedger:
+    """
+    Institutional trade ledger and risk audit log unified on the primary platform Database layer.
+    Persists across process restarts and container deployments in MySQL InnoDB.
+    """
     def __init__(self):
-        os.makedirs(DB_DIR, exist_ok=True)
-        self.db_path = DB_PATH
-        self._init_db()
+        self.db = db
 
     def _get_connection(self):
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_db(self):
-        """Initializes tables for institutional trade ledger and risk audit logs."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        # Trades Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id TEXT PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                market_type TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                size REAL NOT NULL,
-                entry_price REAL NOT NULL,
-                close_price REAL,
-                sl REAL,
-                tp REAL,
-                pnl REAL DEFAULT 0.0,
-                return_pct REAL DEFAULT 0.0,
-                open_time TEXT NOT NULL,
-                close_time TEXT,
-                strategy TEXT NOT NULL,
-                regime TEXT,
-                confidence REAL,
-                dxy_at_entry REAL,
-                exit_reason TEXT,
-                was_wrong_trade INTEGER DEFAULT 0,
-                retrained_on_mistake INTEGER DEFAULT 0,
-                loss_cause TEXT,
-                features_json TEXT
-            )
-        """)
-
-        # Risk Audit Logs Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS risk_audit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                symbol TEXT,
-                details TEXT NOT NULL
-            )
-        """)
-
-        conn.commit()
-        conn.close()
+        return self.db.get_connection()
 
     def log_trade_opened(
         self,
@@ -89,13 +38,14 @@ class TradeLedger:
 
         cursor.execute("""
             INSERT OR REPLACE INTO trades (
-                id, symbol, market_type, direction, size, entry_price,
-                sl, tp, open_time, strategy, regime, confidence,
-                dxy_at_entry, features_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, order_id, symbol, market_type, side, direction, size, quantity, entry_price,
+                sl, tp, open_time, entry_time, strategy, regime, market_regime, confidence,
+                dxy_at_entry, features_json, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            trade_id, symbol, market_type, direction, size, entry_price,
-            sl, tp, now, strategy, regime, confidence, dxy_val, feat_json
+            trade_id, trade_id, symbol, market_type, direction.upper(), direction.upper(),
+            size, size, entry_price, sl, tp, now, now, strategy, regime, regime,
+            confidence, dxy_val, feat_json, "OPEN"
         ))
         conn.commit()
         conn.close()
@@ -114,12 +64,13 @@ class TradeLedger:
         now = time.strftime("%Y-%m-%d %H:%M:%S")
 
         # Fetch original trade to compute return %
-        cursor.execute("SELECT entry_price, size, direction FROM trades WHERE id = ?", (trade_id,))
+        cursor.execute("SELECT entry_price, size, direction, side FROM trades WHERE id = ?", (trade_id,))
         row = cursor.fetchone()
         ret_pct = 0.0
-        if row and row["entry_price"] > 0:
-            entry = row["entry_price"]
-            if row["direction"] == "BUY":
+        if row and row["entry_price"] and row["entry_price"] > 0:
+            entry = float(row["entry_price"])
+            direction = str(row["direction"] or row.get("side", "BUY")).upper()
+            if direction == "BUY":
                 ret_pct = round(((close_price - entry) / entry) * 100, 2)
             else:
                 ret_pct = round(((entry - close_price) / entry) * 100, 2)
@@ -129,14 +80,22 @@ class TradeLedger:
         cursor.execute("""
             UPDATE trades SET
                 close_price = ?,
+                exit_price = ?,
                 pnl = ?,
+                gross_pnl = ?,
+                net_pnl = ?,
                 return_pct = ?,
                 close_time = ?,
+                exit_time = ?,
                 exit_reason = ?,
                 was_wrong_trade = ?,
-                loss_cause = ?
+                loss_cause = ?,
+                status = 'CLOSED'
             WHERE id = ?
-        """, (close_price, pnl, ret_pct, now, exit_reason, was_wrong, loss_cause or "", trade_id))
+        """, (
+            close_price, close_price, round(pnl, 2), round(pnl, 2), round(pnl, 2),
+            ret_pct, now, now, exit_reason, was_wrong, loss_cause or "", trade_id
+        ))
 
         conn.commit()
         conn.close()
@@ -167,11 +126,22 @@ class TradeLedger:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, symbol, market_type, direction, size, entry_price, close_price,
-                   sl, tp, pnl, return_pct, open_time, close_time, strategy,
-                   regime, exit_reason, was_wrong_trade, loss_cause
+            SELECT id, symbol,
+                   COALESCE(market_type, 'FOREX') as market_type,
+                   COALESCE(direction, side) as direction,
+                   COALESCE(size, quantity) as size,
+                   entry_price,
+                   COALESCE(close_price, exit_price) as close_price,
+                   sl, tp,
+                   COALESCE(net_pnl, pnl) as pnl,
+                   return_pct,
+                   COALESCE(open_time, entry_time) as open_time,
+                   COALESCE(close_time, exit_time) as close_time,
+                   strategy,
+                   COALESCE(regime, market_regime) as regime,
+                   exit_reason, was_wrong_trade, loss_cause, status
             FROM trades
-            ORDER BY open_time DESC
+            ORDER BY COALESCE(open_time, entry_time) DESC
             LIMIT ?
         """, (limit,))
         rows = cursor.fetchall()
@@ -184,7 +154,15 @@ class TradeLedger:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("SELECT COUNT(*) as total, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, SUM(pnl) as net_pnl, SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) as gross_profit, SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END) as gross_loss FROM trades WHERE close_price IS NOT NULL")
+        cursor.execute("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN COALESCE(net_pnl, pnl) > 0 THEN 1 ELSE 0 END) as wins,
+                   SUM(COALESCE(net_pnl, pnl)) as net_pnl,
+                   SUM(CASE WHEN COALESCE(net_pnl, pnl) > 0 THEN COALESCE(net_pnl, pnl) ELSE 0 END) as gross_profit,
+                   SUM(CASE WHEN COALESCE(net_pnl, pnl) < 0 THEN COALESCE(net_pnl, pnl) ELSE 0 END) as gross_loss
+            FROM trades
+            WHERE (close_price IS NOT NULL OR exit_price IS NOT NULL OR status = 'CLOSED')
+        """)
         row = cursor.fetchone()
 
         total = row["total"] or 0
@@ -199,7 +177,8 @@ class TradeLedger:
 
         # Count risk audit vetoes
         cursor.execute("SELECT COUNT(*) as veto_count FROM risk_audit")
-        veto_count = cursor.fetchone()["veto_count"] or 0
+        veto_row = cursor.fetchone()
+        veto_count = (veto_row["veto_count"] if veto_row else 0) or 0
 
         conn.close()
         return {
@@ -217,12 +196,23 @@ class TradeLedger:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, symbol, market_type, direction, size, entry_price, close_price,
-                   sl, tp, pnl, return_pct, open_time, close_time, strategy,
-                   regime, confidence, dxy_at_entry, exit_reason, was_wrong_trade,
-                   retrained_on_mistake, loss_cause
+            SELECT id, symbol,
+                   COALESCE(market_type, 'FOREX') as market_type,
+                   COALESCE(direction, side) as direction,
+                   COALESCE(size, quantity) as size,
+                   entry_price,
+                   COALESCE(close_price, exit_price) as close_price,
+                   sl, tp,
+                   COALESCE(net_pnl, pnl) as pnl,
+                   return_pct,
+                   COALESCE(open_time, entry_time) as open_time,
+                   COALESCE(close_time, exit_time) as close_time,
+                   strategy,
+                   COALESCE(regime, market_regime) as regime,
+                   confidence, dxy_at_entry, exit_reason, was_wrong_trade,
+                   loss_cause, status
             FROM trades
-            ORDER BY open_time DESC
+            ORDER BY COALESCE(open_time, entry_time) DESC
             LIMIT ?
         """, (limit,))
         rows = cursor.fetchall()
@@ -266,3 +256,4 @@ class TradeLedger:
         return output.getvalue()
 
 trade_ledger = TradeLedger()
+

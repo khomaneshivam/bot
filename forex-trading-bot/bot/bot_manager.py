@@ -24,6 +24,9 @@ from bot.execution.trade_ledger import trade_ledger
 from bot.ai.audit_scanner import market_audit_scanner
 from bot.data.news_feed import news_feed_engine
 from bot.risk.psychology_guard import psychology_guard
+from bot.risk.circuit_breakers import circuit_breaker_manager
+from bot.execution.service import execution_service
+from bot.storage.db import db
 
 class BotManager:
     def __init__(self):
@@ -31,6 +34,7 @@ class BotManager:
         self.active_symbol = settings.DEFAULT_SYMBOL
         self.active_timeframe = settings.DEFAULT_TIMEFRAME
         self.loop_task: Optional[asyncio.Task] = None
+        self.last_snapshot_time: float = 0.0
         
         # State Caches
         self.latest_candles_df: Optional[pd.DataFrame] = None
@@ -169,6 +173,29 @@ class BotManager:
         """High-frequency institutional execution loop."""
         while self.is_running:
             try:
+                # 0. Check Midnight UTC daily starting baseline rollover & periodic snapshots
+                if risk_manager.check_and_rollover_daily_baseline():
+                    self.log_event("SUCCESS", f"Midnight UTC rollover complete: Daily baseline set to ${risk_manager.daily_starting_equity:.2f}.", "RISK")
+                    db.record_account_snapshot(
+                        balance=execution_engine.paper_balance,
+                        equity=execution_engine.paper_equity,
+                        unrealized_pnl=sum(p.get("unrealized_pnl", 0.0) for p in execution_engine.open_positions),
+                        realized_pnl=execution_engine.paper_realized_pnl,
+                        daily_starting_equity=risk_manager.daily_starting_equity,
+                        drawdown_limit_hit=risk_manager.daily_drawdown_limit_hit
+                    )
+
+                if time.time() - self.last_snapshot_time >= 900.0 or self.last_snapshot_time == 0.0:
+                    self.last_snapshot_time = time.time()
+                    db.record_account_snapshot(
+                        balance=execution_engine.paper_balance,
+                        equity=execution_engine.paper_equity,
+                        unrealized_pnl=sum(p.get("unrealized_pnl", 0.0) for p in execution_engine.open_positions),
+                        realized_pnl=execution_engine.paper_realized_pnl,
+                        daily_starting_equity=risk_manager.daily_starting_equity,
+                        drawdown_limit_hit=risk_manager.daily_drawdown_limit_hit
+                    )
+
                 # 1. Fetch live market candles in worker thread for active symbol
                 df = await asyncio.to_thread(market_feed.get_candles, self.active_symbol, self.active_timeframe, 150)
                 self.latest_candles_df = df
@@ -201,10 +228,7 @@ class BotManager:
 
                 closed_ids = execution_engine.update_positions_and_check_exits(current_ticks)
                 if closed_ids:
-                    if settings.AUTO_RETRAIN_ON_WRONG_TRADE and ml_engine.wrong_trades:
-                        self.log_event("INFO", f"Wrong trade exited ➔ Retraining AI model on mistake pattern ({len(ml_engine.wrong_trades)} learned)...", "AI_LEARN")
-                        await asyncio.to_thread(ml_engine.train_on_data, df)
-                        self.log_event("SUCCESS", f"AI Model retrained! Negative Shield active with {len(ml_engine.wrong_trades)} learned patterns.", "AI_LEARN")
+                    self.log_event("INFO", f"Closed {len(closed_ids)} position(s). Execution forensics logged.", "TRADE_EXIT")
 
                 # 4. Multi-Pair Autonomous Opportunity Execution via 1-Minute Audit Scanner
                 if settings.AUTONOMOUS_ENABLED and not risk_manager.daily_drawdown_limit_hit:
@@ -228,9 +252,9 @@ class BotManager:
                             cand_conf = cand["confidence"]
                             cand_feats = np.array(cand["features_snapshot"], dtype=np.float32) if cand.get("features_snapshot") else None
 
-                            is_crypto = market_feed.is_crypto(cand_sym)
+                            cand_spec = execution_service.adapter.get_symbol_info(cand_sym)
                             equity = execution_engine.paper_equity
-                            size = risk_manager.calculate_position_size(equity, cand_entry, cand_sl, is_crypto)
+                            size = risk_manager.calculate_position_size(equity, cand_entry, cand_sl, cand_spec)
 
                             if size > 0:
                                 order = execution_engine.place_order(
@@ -262,12 +286,12 @@ class BotManager:
                         if decision.get("vetoed"):
                             self.log_event("WARNING", f"🛡️ ENTRY BLOCKED: {decision['reason']}", "NEGATIVE_SHIELD")
                         elif decision["signal"] in ["BUY", "SELL"]:
-                            is_crypto = market_feed.is_crypto(self.active_symbol)
+                            active_spec = execution_service.adapter.get_symbol_info(self.active_symbol)
                             equity = execution_engine.paper_equity
                             entry_p = decision["entry_price"]
                             sl_p = decision["sl_price"]
                             
-                            size = risk_manager.calculate_position_size(equity, entry_p, sl_p, is_crypto)
+                            size = risk_manager.calculate_position_size(equity, entry_p, sl_p, active_spec)
                             feat_snapshot = extract_features_vector(last_row)
                             
                             if size > 0:
@@ -369,7 +393,10 @@ class BotManager:
             "candles": candles_list,
             "audit_matrix": market_audit_scanner.get_latest_audit(),
             "news": news_feed_engine.get_news_telemetry(),
-            "psychology": psychology_guard.get_psychology_telemetry(account.get("balance", 100.0))
+            "psychology": psychology_guard.get_psychology_telemetry(account.get("balance", 100.0)),
+            "circuit_breakers": circuit_breaker_manager.get_status().model_dump() if hasattr(circuit_breaker_manager.get_status(), "model_dump") else circuit_breaker_manager.get_status().dict(),
+            "broker_connected": execution_service.adapter.is_connected(),
+            "feed_fresh": market_feed.is_feed_fresh(self.active_symbol)
         }
 
 bot_manager = BotManager()

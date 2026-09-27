@@ -267,7 +267,9 @@ class StrategyEnsemble:
 
         # 6. AI Deep Predictor
         if settings.ENABLE_AI_PREDICTOR:
-            ai_sig, ai_conf = ml_engine.predict_signal(curr)
+            ai_res = ml_engine.predict_signal(curr)
+            ai_sig = ai_res[0] if len(ai_res) > 0 else "HOLD"
+            ai_conf = ai_res[1] if len(ai_res) > 1 else 0.0
             votes["AI_Deep_Predictor"] = {"signal": ai_sig, "conf": ai_conf}
 
         # Calculate Weighted Aggregate Score

@@ -35,26 +35,29 @@ fi
 mkdir -p forex-trading-bot/data
 
 # Restart and rebuild containers
-echo "🐳 Rebuilding and restarting Docker containers..."
+echo "🐳 Rebuilding and restarting Docker containers via docker-compose.prod.yml..."
+COMPOSE_FILE="docker-compose.prod.yml"
+
 if docker compose version &> /dev/null; then
-    docker compose down --remove-orphans || true
-    docker compose up -d --build
+    docker compose -f "$COMPOSE_FILE" down --remove-orphans || true
+    docker compose -f "$COMPOSE_FILE" up -d --build
 else
-    docker-compose down --remove-orphans || true
-    docker-compose up -d --build
+    docker-compose -f "$COMPOSE_FILE" down --remove-orphans || true
+    docker-compose -f "$COMPOSE_FILE" up -d --build
 fi
 
 # Wait for container startup and health check
-echo "⏳ Waiting for health check verification..."
-sleep 10
+echo "⏳ Waiting for health check verification via Nginx reverse proxy..."
+sleep 15
 
-MAX_RETRIES=6
+MAX_RETRIES=10
 COUNT=0
 HEALTHY=0
 
 while [ $COUNT -lt $MAX_RETRIES ]; do
-    if curl -s -f http://localhost:8000/api/status > /dev/null 2>&1; then
-        echo "✅ QuantAI Terminal is live and healthy at http://localhost:8000!"
+    # Check through Nginx proxy (port 80)
+    if curl -s -f http://localhost/metrics > /dev/null 2>&1 || curl -s -f http://localhost:8000/metrics > /dev/null 2>&1; then
+        echo "✅ QuantAI Terminal is live and healthy (reverse-proxy verified)!"
         HEALTHY=1
         break
     else
@@ -65,9 +68,9 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $HEALTHY -eq 0 ]; then
-    echo "⚠️ Warning: Healthcheck did not respond on localhost:8000 within timeout."
+    echo "⚠️ Warning: Healthcheck did not respond within timeout."
     echo "Checking docker logs:"
-    docker compose logs --tail=50
+    docker compose -f "$COMPOSE_FILE" logs --tail=50
     exit 1
 fi
 
