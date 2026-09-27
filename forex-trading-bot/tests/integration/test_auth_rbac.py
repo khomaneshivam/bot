@@ -23,11 +23,15 @@ def test_login_invalid_password_returns_401():
     assert resp.status_code == 401
 
 def test_unauthenticated_request_rejected():
-    resp = client.get("/api/status")
+    resp = client.get("/api/auth/me")
     assert resp.status_code == 401
 
 def test_unauthenticated_public_read_endpoints_accessible():
     """Telemetry and public trade ledger endpoints are accessible without authentication."""
+    resp_status = client.get("/api/status")
+    assert resp_status.status_code == 200
+    assert "account" in resp_status.json()
+
     resp = client.get("/api/trades/all")
     assert resp.status_code == 200
     data = resp.json()
@@ -41,9 +45,10 @@ def test_unauthenticated_public_read_endpoints_accessible():
 def test_rbac_read_only_viewer_permissions(viewer_token):
     headers = {"Authorization": f"Bearer {viewer_token}"}
 
-    # Viewer can access read API
-    resp = client.get("/api/status", headers=headers)
+    # Viewer can access authenticated profile API
+    resp = client.get("/api/auth/me", headers=headers)
     assert resp.status_code == 200
+    assert resp.json()["role"] == "READ_ONLY"
 
     # Viewer cannot start or stop bot
     resp = client.post("/api/bot/start", headers=headers)

@@ -195,7 +195,7 @@ async def metrics_endpoint():
     return Response(content=generate_metrics_output(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 @app.get("/api/status")
-async def get_status(user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_status(user: Optional[User] = Depends(get_optional_user)):
     return bot_manager.get_full_dashboard_state()
 
 # -------------------------------------------------------------

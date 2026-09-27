@@ -210,6 +210,17 @@ class NewsFeedEngine:
 
         return False, None
 
+    def evaluate_news_volatility_shield(
+        self,
+        symbol: str,
+        current_dt_utc: Optional[datetime] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Evaluates news & macro volatility shield for candidate symbol.
+        Returns (is_vetoed: bool, reason: Optional[str]).
+        """
+        return self.is_macro_blackout_active(symbol, current_dt_utc)
+
     def get_news_telemetry(self) -> Dict:
         """Returns structured macro and news telemetry for the dashboard."""
         articles = self.fetch_news()

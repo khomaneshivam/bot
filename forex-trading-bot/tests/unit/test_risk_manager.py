@@ -106,3 +106,10 @@ def test_trailing_stop_tightens_only_in_profit():
         atr=0.0020
     )
     assert worse_sl is None
+
+def test_evaluate_news_volatility_shield_exists_and_runs():
+    from bot.data.news_feed import news_feed_engine
+    is_vetoed, reason = news_feed_engine.evaluate_news_volatility_shield("EURUSD")
+    assert isinstance(is_vetoed, bool)
+    if is_vetoed:
+        assert isinstance(reason, str)
