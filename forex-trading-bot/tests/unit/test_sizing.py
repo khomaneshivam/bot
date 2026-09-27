@@ -103,3 +103,59 @@ def test_leverage_limit_capping():
     )
 
     assert vol <= 50.0
+
+def test_position_sizing_resilience_to_boolean_is_crypto():
+    """Verifies that calculate_broker_aware_position_size never crashes when spec is bool or None."""
+    # Test with spec=True (crypto bool)
+    vol_crypto, metrics_crypto = calculate_broker_aware_position_size(
+        equity=1000.0,
+        risk_percent=2.0,
+        entry_price=50000.0,
+        sl_price=49000.0,
+        spec=True
+    )
+    assert vol_crypto > 0
+
+    # Test with spec=False (forex bool)
+    vol_forex, metrics_forex = calculate_broker_aware_position_size(
+        equity=10000.0,
+        risk_percent=2.0,
+        entry_price=1.1000,
+        sl_price=1.0950,
+        spec=False
+    )
+    assert vol_forex > 0
+
+    # Test with spec=None
+    vol_none, metrics_none = calculate_broker_aware_position_size(
+        equity=10000.0,
+        risk_percent=2.0,
+        entry_price=1.1000,
+        sl_price=1.0950,
+        spec=None
+    )
+    assert vol_none > 0
+
+def test_risk_manager_calculate_position_size_returns_sized_volume():
+    """Verifies RiskManager.calculate_position_size returns SizedVolume that works as float and 2-tuple."""
+    from bot.risk.risk_manager import risk_manager
+
+    # 1. As float in boolean comparison
+    size = risk_manager.calculate_position_size(
+        equity=1000.0,
+        entry_price=50000.0,
+        sl_price=49000.0,
+        spec=True
+    )
+    assert size > 0
+    assert float(size) > 0
+
+    # 2. As unpacked tuple
+    vol, metrics = risk_manager.calculate_position_size(
+        equity=1000.0,
+        entry_price=50000.0,
+        sl_price=49000.0,
+        spec=True
+    )
+    assert vol == float(size)
+    assert isinstance(metrics, dict)

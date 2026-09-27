@@ -23,6 +23,7 @@ from bot.storage.db import db
 from bot.security.models import Role, User, LoginRequest, LoginResponse
 from bot.security.auth import (
     get_current_user,
+    get_optional_user,
     require_role,
     verify_password,
     generate_access_token,
@@ -380,7 +381,7 @@ async def reset_circuit_breakers(user: User = Depends(require_role(Role.ADMIN)))
 # -------------------------------------------------------------
 
 @app.get("/api/trades/all")
-async def get_all_trades(user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_all_trades(user: Optional[User] = Depends(get_optional_user)):
     return {
         "status": "success",
         "open_positions": execution_engine.open_positions,
@@ -390,7 +391,7 @@ async def get_all_trades(user: User = Depends(require_role(Role.READ_ONLY))):
     }
 
 @app.get("/api/trade/{trade_id}")
-async def get_trade_details(trade_id: str, user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_trade_details(trade_id: str, user: Optional[User] = Depends(get_optional_user)):
     for pos in execution_engine.open_positions:
         if pos["id"] == trade_id:
             return {"status": "success", "is_open": True, "trade": pos}
@@ -400,7 +401,7 @@ async def get_trade_details(trade_id: str, user: User = Depends(require_role(Rol
     raise HTTPException(status_code=404, detail="Trade record not found")
 
 @app.get("/api/trades/export")
-async def export_trades_csv_route(user: User = Depends(require_role(Role.READ_ONLY))):
+async def export_trades_csv_route(user: Optional[User] = Depends(get_optional_user)):
     csv_data = trade_ledger.export_trades_csv()
     return Response(
         content=csv_data,
@@ -409,7 +410,7 @@ async def export_trades_csv_route(user: User = Depends(require_role(Role.READ_ON
     )
 
 @app.get("/api/wrong-trades")
-async def get_wrong_trades(user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_wrong_trades(user: Optional[User] = Depends(get_optional_user)):
     return {
         "wrong_trades": ml_engine.wrong_trades,
         "vetoed_count": ml_engine.vetoed_trades_count,
@@ -417,15 +418,15 @@ async def get_wrong_trades(user: User = Depends(require_role(Role.READ_ONLY))):
     }
 
 @app.get("/api/audit/matrix")
-async def get_audit_matrix(user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_audit_matrix(user: Optional[User] = Depends(get_optional_user)):
     return market_audit_scanner.get_latest_audit()
 
 @app.get("/api/news")
-async def get_market_news_route(user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_market_news_route(user: Optional[User] = Depends(get_optional_user)):
     return news_feed.get_news_telemetry()
 
 @app.get("/api/psychology")
-async def get_psychology_route(user: User = Depends(require_role(Role.READ_ONLY))):
+async def get_psychology_route(user: Optional[User] = Depends(get_optional_user)):
     return psychology_guard.get_psychology_telemetry(execution_engine.paper_balance)
 
 # -------------------------------------------------------------

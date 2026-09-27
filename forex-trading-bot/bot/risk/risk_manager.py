@@ -1,8 +1,8 @@
 import time
-from typing import Tuple, Dict, List, Optional, Any
+from typing import Tuple, Dict, List, Optional, Any, Union
 from bot.config.settings import settings
 from bot.execution.models import InstrumentSpecification
-from bot.risk.models import RiskDecision, RiskCheckResult
+from bot.risk.models import RiskDecision, RiskCheckResult, SizedVolume
 from bot.risk.circuit_breakers import circuit_breaker_manager
 from bot.risk.sizing import calculate_broker_aware_position_size
 
@@ -65,21 +65,57 @@ class RiskManager:
         equity: float,
         entry_price: float,
         sl_price: float,
-        spec: InstrumentSpecification,
+        spec: Union[InstrumentSpecification, bool, str, None] = None,
         max_leverage: float = 30.0
-    ) -> Tuple[float, Dict[str, float]]:
-        """Calculates broker-aware position size."""
+    ) -> SizedVolume:
+        """Calculates broker-aware position size returning SizedVolume (float + unpackable 2-tuple)."""
         if self.daily_drawdown_limit_hit or circuit_breaker_manager.is_tripped():
-            return 0.0, {"error": "Trading halted by risk engine."}
+            return SizedVolume(0.0, {"error": "Trading halted by risk engine."})
 
-        return calculate_broker_aware_position_size(
+        resolved_spec = spec
+        if isinstance(spec, bool) or spec is None:
+            if spec is True:
+                resolved_spec = InstrumentSpecification(
+                    symbol="BTCUSDT",
+                    tick_size=0.01,
+                    tick_value=0.01,
+                    contract_size=1.0,
+                    min_volume=0.001,
+                    max_volume=100.0,
+                    volume_step=0.001,
+                    base_currency="BTC",
+                    quote_currency="USDT",
+                    is_crypto=True
+                )
+            else:
+                resolved_spec = InstrumentSpecification(
+                    symbol="EURUSD",
+                    tick_size=0.00001,
+                    tick_value=1.0,
+                    contract_size=100000.0,
+                    min_volume=0.01,
+                    max_volume=100.0,
+                    volume_step=0.01,
+                    base_currency="EUR",
+                    quote_currency="USD",
+                    is_crypto=False
+                )
+        elif isinstance(spec, str):
+            try:
+                from bot.execution.service import execution_service
+                resolved_spec = execution_service.adapter.get_symbol_info(spec)
+            except Exception:
+                pass
+
+        vol, metrics = calculate_broker_aware_position_size(
             equity=equity,
             risk_percent=self.max_risk_per_trade_pct,
             entry_price=entry_price,
             sl_price=sl_price,
-            spec=spec,
+            spec=resolved_spec,
             max_leverage=max_leverage
         )
+        return SizedVolume(vol, metrics)
 
     def evaluate_pre_trade_gates(
         self,

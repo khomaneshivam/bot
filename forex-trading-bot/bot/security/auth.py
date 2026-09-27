@@ -156,6 +156,40 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Secur
         last_login=row["last_login"]
     )
 
+def get_optional_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security_scheme)) -> Optional[User]:
+    """FastAPI Dependency: Authenticates Bearer token if provided, returning None if unauthenticated."""
+    if not credentials or not credentials.credentials:
+        return None
+
+    payload = verify_access_token(credentials.credentials)
+    if not payload:
+        return None
+
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, role, is_active, created_at, last_login FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or row["is_active"] != 1:
+            return None
+
+        return User(
+            id=row["id"],
+            username=row["username"],
+            role=Role(row["role"]),
+            is_active=bool(row["is_active"]),
+            created_at=row["created_at"],
+            last_login=row["last_login"]
+        )
+    except Exception:
+        return None
+
 def require_role(min_role: Role) -> Callable:
     """FastAPI Dependency Factory: Enforces RBAC permissions."""
     def role_checker(current_user: User = Depends(get_current_user)) -> User:

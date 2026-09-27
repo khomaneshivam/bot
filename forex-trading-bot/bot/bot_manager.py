@@ -252,9 +252,9 @@ class BotManager:
                             cand_conf = cand["confidence"]
                             cand_feats = np.array(cand["features_snapshot"], dtype=np.float32) if cand.get("features_snapshot") else None
 
-                            is_crypto = market_feed.is_crypto(cand_sym)
+                            cand_spec = execution_service.adapter.get_symbol_info(cand_sym)
                             equity = execution_engine.paper_equity
-                            size = risk_manager.calculate_position_size(equity, cand_entry, cand_sl, is_crypto)
+                            size = risk_manager.calculate_position_size(equity, cand_entry, cand_sl, cand_spec)
 
                             if size > 0:
                                 order = execution_engine.place_order(
@@ -286,12 +286,12 @@ class BotManager:
                         if decision.get("vetoed"):
                             self.log_event("WARNING", f"🛡️ ENTRY BLOCKED: {decision['reason']}", "NEGATIVE_SHIELD")
                         elif decision["signal"] in ["BUY", "SELL"]:
-                            is_crypto = market_feed.is_crypto(self.active_symbol)
+                            active_spec = execution_service.adapter.get_symbol_info(self.active_symbol)
                             equity = execution_engine.paper_equity
                             entry_p = decision["entry_price"]
                             sl_p = decision["sl_price"]
                             
-                            size = risk_manager.calculate_position_size(equity, entry_p, sl_p, is_crypto)
+                            size = risk_manager.calculate_position_size(equity, entry_p, sl_p, active_spec)
                             feat_snapshot = extract_features_vector(last_row)
                             
                             if size > 0:

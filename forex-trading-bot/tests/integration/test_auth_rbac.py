@@ -26,6 +26,18 @@ def test_unauthenticated_request_rejected():
     resp = client.get("/api/status")
     assert resp.status_code == 401
 
+def test_unauthenticated_public_read_endpoints_accessible():
+    """Telemetry and public trade ledger endpoints are accessible without authentication."""
+    resp = client.get("/api/trades/all")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert "open_positions" in data
+    assert "closed_trades" in data
+
+    resp_matrix = client.get("/api/audit/matrix")
+    assert resp_matrix.status_code == 200
+
 def test_rbac_read_only_viewer_permissions(viewer_token):
     headers = {"Authorization": f"Bearer {viewer_token}"}
 

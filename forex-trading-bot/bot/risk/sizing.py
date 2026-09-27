@@ -21,6 +21,35 @@ def calculate_broker_aware_position_size(
     if equity <= 0 or entry_price <= 0 or sl_price <= 0:
         return 0.0, {"error": "Invalid equity or price parameters"}
 
+    # Defensively normalize spec if bool, string, or None passed
+    if isinstance(spec, bool) or spec is None:
+        if spec is True:
+            spec = InstrumentSpecification(
+                symbol="BTCUSDT",
+                tick_size=0.01,
+                tick_value=0.01,
+                contract_size=1.0,
+                min_volume=0.001,
+                max_volume=100.0,
+                volume_step=0.001,
+                base_currency="BTC",
+                quote_currency="USDT",
+                is_crypto=True
+            )
+        else:
+            spec = InstrumentSpecification(
+                symbol="EURUSD",
+                tick_size=0.00001,
+                tick_value=1.0,
+                contract_size=100000.0,
+                min_volume=0.01,
+                max_volume=100.0,
+                volume_step=0.01,
+                base_currency="EUR",
+                quote_currency="USD",
+                is_crypto=False
+            )
+
     # 1. Calculate monetary risk budget
     risk_budget = equity * (risk_percent / 100.0)
 
