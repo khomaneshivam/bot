@@ -41,32 +41,44 @@ class MarketAuditScanner:
         elapsed = time.time() - self.last_audit_time
         return max(0, int(self.audit_interval - elapsed))
 
+    def _get_default_pair_eval(self, symbol: str, price: float = 0.0) -> Dict:
+        return {
+            "symbol": symbol,
+            "price": price,
+            "regime": "NEUTRAL_FLOW",
+            "overall_chance_pct": 15,
+            "overall_signal": "HOLD",
+            "confidence": 0.0,
+            "status_text": "⚪ Market in Equilibrium (15%)",
+            "badge_class": "badge-dormant",
+            "vetoed": False,
+            "veto_reason": None,
+            "strategies": {
+                "Trend_Momentum": {"signal": "HOLD", "conf": 0.0, "chance_pct": 10},
+                "Mean_Reversion": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15},
+                "Volatility_Breakout": {"signal": "HOLD", "conf": 0.0, "chance_pct": 10},
+                "Smart_Money_SMC": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15},
+                "Correlation_Macro": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15},
+                "AI_Deep_Predictor": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15}
+            }
+        }
+
     def evaluate_pair_strategies(self, symbol: str, df_candles: Optional[pd.DataFrame]) -> Dict:
         """
         Evaluates a single asset across all 6 strategies and calculates trade probabilities.
         """
-        if df_candles is None or len(df_candles) < 15:
-            return {
-                "symbol": symbol,
-                "price": 0.0,
-                "regime": "NEUTRAL_FLOW",
-                "overall_chance_pct": 15,
-                "overall_signal": "HOLD",
-                "confidence": 0.0,
-                "status_text": "⚪ Market in Equilibrium (15%)",
-                "badge_class": "badge-dormant",
-                "vetoed": False,
-                "veto_reason": None,
-                "strategies": {
-                    "Trend_Momentum": {"signal": "HOLD", "conf": 0.0, "chance_pct": 10},
-                    "Mean_Reversion": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15},
-                    "Volatility_Breakout": {"signal": "HOLD", "conf": 0.0, "chance_pct": 10},
-                    "Smart_Money_SMC": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15},
-                    "Correlation_Macro": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15},
-                    "AI_Deep_Predictor": {"signal": "HOLD", "conf": 0.0, "chance_pct": 15}
-                }
-            }
+        if df_candles is None or len(df_candles) < 30:
+            price = float(df_candles.iloc[-1]["close"]) if df_candles is not None and not df_candles.empty else 0.0
+            return self._get_default_pair_eval(symbol, price)
 
+        try:
+            return self._evaluate_pair_strategies_inner(symbol, df_candles)
+        except Exception as e:
+            print(f"[MarketAuditScanner] Error evaluating strategies for {symbol}: {e}")
+            price = float(df_candles.iloc[-1]["close"]) if df_candles is not None and not df_candles.empty else 0.0
+            return self._get_default_pair_eval(symbol, price)
+
+    def _evaluate_pair_strategies_inner(self, symbol: str, df_candles: pd.DataFrame) -> Dict:
         df_features = compute_all_features(df_candles)
         curr = df_features.iloc[-1]
         prev = df_features.iloc[-2]
@@ -231,15 +243,33 @@ class MarketAuditScanner:
                     asyncio.to_thread(market_feed.get_candles, symbol, "5m", 80),
                     timeout=2.2
                 )
-                return self.evaluate_pair_strategies(symbol, df)
+                if df is not None and len(df) >= 30:
+                    return self.evaluate_pair_strategies(symbol, df)
             except Exception:
+                pass
+
+            try:
                 clean = symbol.upper().replace("-", "").replace("/", "")
                 cached_df = market_feed._cache.get(clean)
                 return self.evaluate_pair_strategies(symbol, cached_df)
+            except Exception:
+                return self._get_default_pair_eval(symbol, 0.0)
 
         try:
             tasks = [_scan_pair(sym) for sym in self.ALL_PAIRS]
-            results = await asyncio.gather(*tasks, return_exceptions=False)
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = []
+            for idx, r in enumerate(raw_results):
+                if isinstance(r, Exception):
+                    sym = self.ALL_PAIRS[idx]
+                    print(f"[MarketAuditScanner] Warning: Error scanning {sym}: {r}")
+                    results.append(self._get_default_pair_eval(sym, 0.0))
+                elif isinstance(r, dict):
+                    results.append(r)
+                else:
+                    sym = self.ALL_PAIRS[idx]
+                    results.append(self._get_default_pair_eval(sym, 0.0))
+
             results.sort(key=lambda x: x.get("overall_chance_pct", 0), reverse=True)
 
             top_pick = results[0]["symbol"] if results else "None"
@@ -259,6 +289,9 @@ class MarketAuditScanner:
 
             print(f"[MarketAuditScanner] [PARALLEL] Fast Audit Complete: Scanned {len(results)} pairs in {self.last_audit_matrix['scan_duration_ms']}ms. Top: {self.last_audit_matrix['top_candidate']}")
             return self.last_audit_matrix
+        except Exception as e:
+            print(f"[MarketAuditScanner] Unexpected error in run_full_market_audit: {e}")
+            return self.get_latest_audit()
         finally:
             self._is_scanning = False
 

@@ -96,21 +96,25 @@ class StrategyEnsemble:
         range_low = df["low"].iloc[-30:].min()
         equilibrium = (range_high + range_low) / 2.0 if range_high > range_low else curr["close"]
 
+        # Safely determine candle direction without raising KeyError if feature column is absent
+        is_bull = bool(curr.get("is_bull_candle", 1.0 if curr["close"] >= curr["open"] else 0.0) == 1.0)
+        is_bear = not is_bull
+
         # 1. Bullish Liquidity Sweep at Discount (< equilibrium)
-        if prev["low"] < recent_low and curr["close"] > recent_low and curr["is_bull_candle"] == 1.0:
+        if prev["low"] < recent_low and curr["close"] > recent_low and is_bull:
             if curr.get("lower_shadow_ratio", 0.0) > 0.35 and curr["close"] <= equilibrium * 1.01:
                 return "BUY", 0.89
 
         # Bearish Liquidity Sweep at Premium (> equilibrium)
-        if prev["high"] > recent_high and curr["close"] < recent_high and curr["is_bull_candle"] == 0.0:
+        if prev["high"] > recent_high and curr["close"] < recent_high and is_bear:
             if curr.get("upper_shadow_ratio", 0.0) > 0.35 and curr["close"] >= equilibrium * 0.99:
                 return "SELL", 0.89
 
         # 2. Institutional Fair Value Gap (FVG) Imbalance Retest
         # Bullish 3-candle FVG: candle[i-2] High is strictly lower than candle[i] Low (liquidity void)
-        if curr["low"] > c3["high"] and curr["is_bull_candle"] == 1.0:
+        if curr["low"] > c3["high"] and is_bull:
             return "BUY", 0.84
-        elif curr["high"] < c3["low"] and curr["is_bull_candle"] == 0.0:
+        elif curr["high"] < c3["low"] and is_bear:
             return "SELL", 0.84
 
         return "HOLD", 0.0

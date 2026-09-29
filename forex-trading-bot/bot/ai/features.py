@@ -36,8 +36,22 @@ def compute_all_features(df: pd.DataFrame) -> pd.DataFrame:
     Computes 60+ quantitative trading features and market regime indicators
     on an OHLCV dataframe.
     """
-    if df is None or len(df) < 30:
+    if df is None or len(df) == 0:
         return df
+
+    if len(df) < 30:
+        data = df.copy()
+        if "close" in data.columns and "open" in data.columns:
+            data["is_bull_candle"] = (data["close"] >= data["open"]).astype(float)
+        if "high" in data.columns and "low" in data.columns and "close" in data.columns and "open" in data.columns:
+            candle_range = data["high"] - data["low"] + 1e-8
+            body_size = (data["close"] - data["open"]).abs()
+            data["candle_body_ratio"] = body_size / candle_range
+            upper_wick = data["high"] - np.maximum(data["open"], data["close"])
+            lower_wick = np.minimum(data["open"], data["close"]) - data["low"]
+            data["upper_shadow_ratio"] = upper_wick / candle_range
+            data["lower_shadow_ratio"] = lower_wick / candle_range
+        return data
 
     data = df.copy()
     close = data["close"]
