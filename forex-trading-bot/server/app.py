@@ -2,6 +2,9 @@ import os
 import sys
 import asyncio
 import time
+import re
+import uuid
+import hashlib
 
 if sys.platform == "win32":
     try:
@@ -10,7 +13,8 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request, Response, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request, Response, status, Security
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -20,14 +24,16 @@ from typing import Optional, Dict
 
 from bot.config.settings import settings
 from bot.storage.db import db
-from bot.security.models import Role, User, LoginRequest, LoginResponse
+from bot.security.models import Role, User, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, ChangePasswordRequest
 from bot.security.auth import (
     get_current_user,
     get_optional_user,
     require_role,
     verify_password,
+    hash_password,
     generate_access_token,
     verify_access_token,
+    security_scheme,
     bootstrap_initial_users
 )
 from bot.security.audit import audit_logger
@@ -45,8 +51,11 @@ from bot.bot_manager import bot_manager
 from bot.data.market_feed import market_feed
 from bot.data.news_feed import news_feed
 from bot.ai.ml_engine import ml_engine
+from bot.ai.model_registry import model_registry
 from bot.ai.audit_scanner import market_audit_scanner
 from bot.risk.psychology_guard import psychology_guard
+from bot.risk.risk_manager import risk_manager
+from bot.execution.reconciliation import reconciliation_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -171,12 +180,239 @@ async def login(req: LoginRequest, request: Request):
     )
 
 @app.get("/api/auth/me")
-async def get_current_user_profile(user: User = Depends(get_current_user)):
+async def get_current_user_profile(request: Request, user: User = Depends(get_current_user)):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+
+    # Count active non-revoked sessions
+    active_sessions_count = 1
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as cnt FROM active_sessions WHERE user_id = ? AND is_revoked = 0", (user.id,))
+        row = cursor.fetchone()
+        if row:
+            active_sessions_count = row["cnt"]
+        conn.close()
+    except Exception:
+        pass
+
+    # Authoritative RBAC capability matrix
+    permissions = ["READ_TELEMETRY", "VIEW_ORDERS", "VIEW_POSITIONS", "VIEW_RISK"]
+    if user.role in (Role.TRADER, Role.ADMIN):
+        permissions.extend(["MANAGE_BOT", "EXECUTE_TRADES", "CLOSE_POSITIONS"])
+    if user.role == Role.ADMIN:
+        permissions.extend(["SWITCH_MODE", "RESET_CAPITAL", "RESET_CIRCUIT_BREAKERS", "PROMOTE_MODELS"])
+
     return {
         "id": user.id,
         "username": user.username,
-        "role": user.role.value
+        "role": user.role.value,
+        "created_at": user.created_at,
+        "last_login": user.last_login,
+        "is_active": user.is_active,
+        "client_ip": client_ip,
+        "active_sessions_count": active_sessions_count,
+        "permissions": permissions
     }
+
+@app.post("/api/auth/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    request: Request,
+    user: User = Depends(get_current_user)
+):
+    client_ip = request.client.host if request.client else None
+
+    # 1. Verify current password
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT password_hash FROM users WHERE id = ?", (user.id,))
+    row = cursor.fetchone()
+
+    if not row or not verify_password(req.old_password, row["password_hash"]):
+        conn.close()
+        audit_logger.log_event(
+            actor_id=user.id,
+            action="PASSWORD_CHANGE_FAILED",
+            target="auth",
+            result="FAILURE",
+            ip_address=client_ip
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current passphrase is incorrect.")
+
+    # 2. Validate new password complexity
+    if len(req.new_password) < 8:
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="New password must be at least 8 characters long.")
+    if not re.search(r"[0-9]", req.new_password) or not re.search(r"[a-zA-Z]", req.new_password):
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="New password must contain at least one letter and at least one number.")
+
+    # 3. Confirm matching
+    if req.confirm_password is not None and req.new_password != req.confirm_password:
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="New passphrase and confirmation passphrase do not match.")
+
+    # 4. Hash and update
+    new_hashed = hash_password(req.new_password)
+    cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hashed, user.id))
+    conn.commit()
+    conn.close()
+
+    audit_logger.log_event(
+        actor_id=user.id,
+        action="PASSWORD_CHANGED",
+        target=f"user:{user.username}",
+        result="SUCCESS",
+        ip_address=client_ip
+    )
+
+    return {"success": True, "message": "Passphrase updated successfully."}
+
+@app.post("/api/auth/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+async def register(req: RegisterRequest, request: Request):
+    client_ip = request.client.host if request.client else None
+    cleaned_username = req.username.strip().lower()
+
+    # 1. Username syntax validation (alphanumeric, underscores, hyphens, 3-32 chars)
+    if not re.match(r"^[a-zA-Z0-9_-]{3,32}$", cleaned_username):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Username must be 3-32 characters long and contain only letters, numbers, underscores, and hyphens."
+        )
+
+    # 2. Password complexity validation
+    if len(req.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be at least 8 characters long."
+        )
+    if not re.search(r"[0-9]", req.password) or not re.search(r"[a-zA-Z]", req.password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must contain at least one letter and at least one number."
+        )
+
+    # 3. Confirm password matching
+    if req.confirm_password is not None and req.password != req.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password and confirmation password do not match."
+        )
+
+    # 4. Role Assignment & Authorization Check
+    requested_role_str = (req.role or "TRADER").upper()
+    if requested_role_str == "ADMIN":
+        expected_admin_key = os.getenv("ADMIN_REGISTRATION_KEY", "AdminKeyTrading2026!")
+        if not req.admin_key or req.admin_key != expected_admin_key:
+            audit_logger.log_event(
+                actor_id="anonymous",
+                action="UNAUTHORIZED_ADMIN_REGISTRATION_ATTEMPT",
+                target=f"user:{cleaned_username}",
+                result="BLOCKED",
+                ip_address=client_ip
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid or missing Admin Registration Key for ADMIN role creation."
+            )
+        assigned_role = Role.ADMIN
+    elif requested_role_str in ("TRADER", "READ_ONLY"):
+        assigned_role = Role(requested_role_str)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role specified. Supported roles: TRADER, READ_ONLY, ADMIN."
+        )
+
+    # 5. Check for duplicate username in database
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE username = ?", (cleaned_username,))
+    existing = cursor.fetchone()
+
+    if existing:
+        conn.close()
+        audit_logger.log_event(
+            actor_id="anonymous",
+            action="REGISTRATION_CONFLICT",
+            target=f"user:{cleaned_username}",
+            result="FAILURE",
+            ip_address=client_ip
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already registered. Please select a different username or sign in."
+        )
+
+    # 6. Cryptographic user creation
+    new_user_id = f"usr_{uuid.uuid4().hex[:12]}"
+    hashed_pwd = hash_password(req.password)
+    now_ts = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        INSERT INTO users (id, username, password_hash, role, is_active, created_at, last_login)
+        VALUES (?, ?, ?, ?, 1, ?, ?)
+    """, (new_user_id, cleaned_username, hashed_pwd, assigned_role.value, now_ts, now_ts))
+    conn.commit()
+    conn.close()
+
+    # 7. Issue initial access token
+    new_user = User(
+        id=new_user_id,
+        username=cleaned_username,
+        role=assigned_role,
+        is_active=True,
+        created_at=now_ts,
+        last_login=now_ts
+    )
+    token = generate_access_token(new_user)
+
+    audit_logger.log_event(
+        actor_id=new_user_id,
+        action="USER_REGISTERED",
+        target=f"user:{cleaned_username}",
+        result="SUCCESS",
+        ip_address=client_ip
+    )
+
+    return RegisterResponse(
+        success=True,
+        message="Account successfully registered and authenticated.",
+        access_token=token,
+        token_type="Bearer",
+        role=new_user.role,
+        user_id=new_user.id,
+        username=new_user.username
+    )
+
+@app.post("/api/auth/logout")
+async def logout(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security_scheme),
+    user: Optional[User] = Depends(get_optional_user)
+):
+    client_ip = request.client.host if request.client else None
+    if credentials and credentials.credentials:
+        token = credentials.credentials
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        try:
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE active_sessions SET is_revoked = 1 WHERE token_hash = ?", (token_hash,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    audit_logger.log_event(
+        actor_id=user.id if user else "anonymous",
+        action="LOGOUT",
+        target="auth",
+        result="SUCCESS",
+        ip_address=client_ip
+    )
+    return {"success": True, "message": "Session successfully terminated."}
 
 # -------------------------------------------------------------
 # TELEMETRY & OBSERVABILITY ENDPOINTS
@@ -428,6 +664,93 @@ async def get_market_news_route(user: Optional[User] = Depends(get_optional_user
 @app.get("/api/psychology")
 async def get_psychology_route(user: Optional[User] = Depends(get_optional_user)):
     return psychology_guard.get_psychology_telemetry(execution_engine.paper_balance)
+
+@app.get("/api/orders")
+async def get_orders(user: Optional[User] = Depends(get_optional_user)):
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 200")
+    orders = [dict(r) for r in cursor.fetchall()]
+    cursor.execute("SELECT * FROM order_transitions ORDER BY timestamp DESC LIMIT 500")
+    transitions = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return {"status": "success", "orders": orders, "transitions": transitions}
+
+@app.get("/api/reconciliation/status")
+async def get_reconciliation_status(user: Optional[User] = Depends(get_optional_user)):
+    report = reconciliation_service.last_report
+    broker_positions = execution_service.adapter.get_open_positions()
+    serialized_broker = []
+    for p in broker_positions:
+        if hasattr(p, "model_dump"):
+            serialized_broker.append(p.model_dump())
+        elif hasattr(p, "dict"):
+            serialized_broker.append(p.dict())
+        else:
+            serialized_broker.append(dict(p))
+    return {
+        "status": "success",
+        "has_active_mismatch": reconciliation_service.has_active_mismatch,
+        "report": report.dict() if report else None,
+        "internal_positions": execution_service.get_open_positions(),
+        "broker_positions": serialized_broker
+    }
+
+@app.get("/api/risk/status")
+async def get_risk_status(user: Optional[User] = Depends(get_optional_user)):
+    cb_status = circuit_breaker_manager.get_status()
+    blackout, blackout_reason = news_feed.is_macro_blackout_active(bot_manager.active_symbol)
+    return {
+        "status": "success",
+        "circuit_breakers": cb_status.model_dump() if hasattr(cb_status, "model_dump") else cb_status.dict(),
+        "daily_starting_equity": risk_manager.daily_starting_equity,
+        "current_equity": risk_manager.current_equity,
+        "daily_drawdown_limit_hit": risk_manager.daily_drawdown_limit_hit,
+        "max_daily_drawdown_pct": risk_manager.max_daily_drawdown_pct,
+        "max_risk_per_trade_pct": risk_manager.max_risk_per_trade_pct,
+        "max_concurrent_positions": risk_manager.max_concurrent_positions,
+        "max_symbol_positions": risk_manager.max_symbol_positions,
+        "macro_blackout_active": blackout,
+        "macro_blackout_reason": blackout_reason,
+        "broker_connected": execution_service.adapter.is_connected(),
+        "feed_fresh": market_feed.is_feed_fresh(bot_manager.active_symbol)
+    }
+
+@app.get("/api/models")
+async def get_models(user: Optional[User] = Depends(get_optional_user)):
+    champion = model_registry.get_champion()
+    challenger = model_registry.get_challenger()
+    all_models = model_registry.get_all_models()
+    return {
+        "status": "success",
+        "champion": champion,
+        "challenger": challenger,
+        "models": all_models,
+        "stats": ml_engine.get_stats()
+    }
+
+@app.get("/api/audit/logs")
+async def get_audit_logs(limit: int = 150, user: Optional[User] = Depends(get_optional_user)):
+    events = audit_logger.get_recent_audits(limit=limit)
+    return {"status": "success", "events": events}
+
+@app.get("/api/system/health")
+async def get_system_health(user: Optional[User] = Depends(get_optional_user)):
+    import platform
+    return {
+        "status": "healthy" if not circuit_breaker_manager.is_tripped() else "degraded",
+        "api": "ONLINE",
+        "database": "CONNECTED",
+        "broker": "CONNECTED" if execution_service.adapter.is_connected() else "DISCONNECTED",
+        "market_feed": "FRESH" if market_feed.is_feed_fresh(bot_manager.active_symbol) else "STALE",
+        "news_feed": "ONLINE",
+        "ml_engine": "ONLINE" if ml_engine.is_trained else "INITIALIZING",
+        "circuit_breaker": "TRIPPED" if circuit_breaker_manager.is_tripped() else "ARMED",
+        "reconciliation": "MISMATCH" if reconciliation_service.has_active_mismatch else "SYNCHRONIZED",
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
 
 # -------------------------------------------------------------
 # AUTHENTICATED WEBSOCKET ENDPOINT

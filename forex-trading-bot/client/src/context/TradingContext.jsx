@@ -1,8 +1,3 @@
-/**
- * QuantAI Terminal - Reactive Global Trading Context
- * Central state store managing live telemetry, portfolio capital, and user actions
- */
-
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { api } from "../services/api";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -10,11 +5,24 @@ import { useWebSocket } from "../hooks/useWebSocket";
 const TradingContext = createContext(null);
 
 export function TradingProvider({ children }) {
-  // Navigation & Theme State
-  const [activeView, setActiveView] = useState("terminal"); // "terminal" | "ledger" | "scanner" | "ai-studio" | "macro"
-  const [theme, setTheme] = useState(() => localStorage.getItem("quant_theme") || "dark");
+  // Navigation State - Supports 12 First-Class Views
+  const [activeView, setActiveView] = useState("dashboard");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const toggleSidebar = () => setIsSidebarCollapsed((prev) => !prev);
 
-  // Core Quant Telemetry State
+  // Safe Action Confirmation Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    warningNote: "",
+    confirmWord: null,
+    confirmVariant: "danger",
+    checklist: [],
+    onConfirm: () => {},
+  });
+
+  // Core Real-Time Telemetry State
   const [telemetry, setTelemetry] = useState({
     symbol: "EURUSD",
     market_type: "FOREX",
@@ -32,40 +40,41 @@ export function TradingProvider({ children }) {
       losing_trades: 0,
       profit_factor: 1.0,
       open_positions_count: 0,
+      daily_drawdown_limit_hit: false,
       risk_vetoes_count: 0,
     },
     candles: [],
     open_positions: [],
     closed_trades: [],
-    terminal_logs: [],
-    dxy_proxy: 104.5,
-    dxy_trend: "NEUTRAL",
+    wrong_trades: [],
+    logs: [],
     regime: "NEUTRAL",
-    correlation_matrix: {},
+    correlation: {},
     strategies: {},
     ml_stats: {},
-    audit_matrix: null,
     latest_decision: {},
+    audit_matrix: null,
     news: null,
     psychology: null,
+    circuit_breakers: { tripped: false, active_breakers: {}, trip_timestamps: {} },
+    broker_connected: true,
+    feed_fresh: true,
   });
 
-  // Dedicated All Trades Ledger State
-  const [allTradesData, setAllTradesData] = useState({
-    allTrades: [],
-    summary: {},
+  // Dedicated View States
+  const [ordersData, setOrdersData] = useState({ orders: [], transitions: [], isLoading: false });
+  const [reconciliationData, setReconciliationData] = useState({
+    report: null,
+    has_active_mismatch: false,
+    internal_positions: [],
+    broker_positions: [],
     isLoading: false,
   });
-
-  // Theme Synchronizer
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("quant_theme", theme);
-  }, [theme]);
-
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
-  };
+  const [riskData, setRiskData] = useState({ status: null, isLoading: false });
+  const [modelsData, setModelsData] = useState({ champion: null, challenger: null, models: [], stats: {}, isLoading: false });
+  const [auditLogsData, setAuditLogsData] = useState({ events: [], isLoading: false });
+  const [systemHealthData, setSystemHealthData] = useState({ health: null, isLoading: false });
+  const [allTradesData, setAllTradesData] = useState({ allTrades: [], summary: {}, isLoading: false });
 
   // WebSocket Message Handler
   const handleWebSocketMessage = useCallback((payload) => {
@@ -73,19 +82,19 @@ export function TradingProvider({ children }) {
     setTelemetry((prev) => ({
       ...prev,
       ...payload,
-      account: payload.account || prev.account,
+      account: payload.account ? { ...prev.account, ...payload.account } : prev.account,
       candles: payload.candles || prev.candles,
-      open_positions: payload.open_positions || prev.open_positions,
-      closed_trades: payload.closed_trades || prev.closed_trades,
-      terminal_logs: payload.terminal_logs || prev.terminal_logs,
-      audit_matrix: payload.audit_matrix || prev.audit_matrix,
-      news: payload.news !== undefined ? payload.news : prev.news,
-      psychology: payload.psychology !== undefined ? payload.psychology : prev.psychology,
+      open_positions: payload.open_positions !== undefined ? payload.open_positions : prev.open_positions,
+      closed_trades: payload.closed_trades !== undefined ? payload.closed_trades : prev.closed_trades,
+      circuit_breakers: payload.circuit_breakers || prev.circuit_breakers,
+      broker_connected: payload.broker_connected !== undefined ? payload.broker_connected : prev.broker_connected,
+      feed_fresh: payload.feed_fresh !== undefined ? payload.feed_fresh : prev.feed_fresh,
     }));
   }, []);
 
   // Initialize WebSocket Link
-  const { isConnected, connectionStatus } = useWebSocket(handleWebSocketMessage);
+  const authToken = typeof localStorage !== "undefined" ? localStorage.getItem("quant_auth_token") : null;
+  const { isConnected, connectionStatus, lastMessageTime, latencyMs } = useWebSocket(handleWebSocketMessage, authToken);
 
   // Fetch initial telemetry state on mount
   useEffect(() => {
@@ -93,10 +102,100 @@ export function TradingProvider({ children }) {
       .then((data) => {
         if (data) handleWebSocketMessage(data);
       })
-      .catch((err) => console.error("[TradingContext] Initial fetch error:", err));
+      .catch((err) => console.warn("[TradingContext] Initial fetch error:", err));
   }, [handleWebSocketMessage]);
 
-  // All Trades Ledger Fetcher
+  // View Data Fetchers
+  const fetchOrders = useCallback(async () => {
+    setOrdersData((prev) => ({ ...prev, isLoading: true }));
+    try {
+      const res = await api.getOrders();
+      if (res && res.orders) {
+        setOrdersData({ orders: res.orders, transitions: res.transitions || [], isLoading: false });
+      }
+    } catch (err) {
+      console.error("[TradingContext] Error fetching orders:", err);
+      setOrdersData((prev) => ({ ...prev, isLoading: false }));
+    }
+  }, []);
+
+  const fetchReconciliation = useCallback(async () => {
+    setReconciliationData((prev) => ({ ...prev, isLoading: true }));
+    try {
+      const res = await api.getReconciliationStatus();
+      if (res) {
+        setReconciliationData({
+          report: res.report,
+          has_active_mismatch: res.has_active_mismatch,
+          internal_positions: res.internal_positions || [],
+          broker_positions: res.broker_positions || [],
+          isLoading: false,
+        });
+      }
+    } catch (err) {
+      console.error("[TradingContext] Error fetching reconciliation:", err);
+      setReconciliationData((prev) => ({ ...prev, isLoading: false }));
+    }
+  }, []);
+
+  const fetchRiskStatus = useCallback(async () => {
+    setRiskData((prev) => ({ ...prev, isLoading: true }));
+    try {
+      const res = await api.getRiskStatus();
+      if (res) {
+        setRiskData({ status: res, isLoading: false });
+      }
+    } catch (err) {
+      console.error("[TradingContext] Error fetching risk status:", err);
+      setRiskData((prev) => ({ ...prev, isLoading: false }));
+    }
+  }, []);
+
+  const fetchModels = useCallback(async () => {
+    setModelsData((prev) => ({ ...prev, isLoading: true }));
+    try {
+      const res = await api.getModels();
+      if (res) {
+        setModelsData({
+          champion: res.champion,
+          challenger: res.challenger,
+          models: res.models || [],
+          stats: res.stats || {},
+          isLoading: false,
+        });
+      }
+    } catch (err) {
+      console.error("[TradingContext] Error fetching models:", err);
+      setModelsData((prev) => ({ ...prev, isLoading: false }));
+    }
+  }, []);
+
+  const fetchAuditLogs = useCallback(async () => {
+    setAuditLogsData((prev) => ({ ...prev, isLoading: true }));
+    try {
+      const res = await api.getAuditLogs(150);
+      if (res && res.events) {
+        setAuditLogsData({ events: res.events, isLoading: false });
+      }
+    } catch (err) {
+      console.error("[TradingContext] Error fetching audit logs:", err);
+      setAuditLogsData((prev) => ({ ...prev, isLoading: false }));
+    }
+  }, []);
+
+  const fetchSystemHealth = useCallback(async () => {
+    setSystemHealthData((prev) => ({ ...prev, isLoading: true }));
+    try {
+      const res = await api.getSystemHealth();
+      if (res) {
+        setSystemHealthData({ health: res, isLoading: false });
+      }
+    } catch (err) {
+      console.error("[TradingContext] Error fetching system health:", err);
+      setSystemHealthData((prev) => ({ ...prev, isLoading: false }));
+    }
+  }, []);
+
   const fetchAllTrades = useCallback(async () => {
     setAllTradesData((prev) => ({ ...prev, isLoading: true }));
     try {
@@ -116,104 +215,263 @@ export function TradingProvider({ children }) {
     }
   }, []);
 
-  // Auto-refresh ledger when switching to ledger view or when open_positions count changes
+  // Fetch view-specific data when navigating
   useEffect(() => {
-    if (activeView === "ledger") {
-      fetchAllTrades();
-    }
-  }, [activeView, fetchAllTrades, telemetry.open_positions.length, telemetry.closed_trades.length]);
+    if (activeView === "orders") fetchOrders();
+    if (activeView === "reconciliation") fetchReconciliation();
+    if (activeView === "risk") fetchRiskStatus();
+    if (activeView === "ml") fetchModels();
+    if (activeView === "audit") fetchAuditLogs();
+    if (activeView === "system") fetchSystemHealth();
+    if (activeView === "positions") fetchAllTrades();
+  }, [activeView, fetchOrders, fetchReconciliation, fetchRiskStatus, fetchModels, fetchAuditLogs, fetchSystemHealth, fetchAllTrades]);
 
-  // Actions
-  const resetCapital = async () => {
-    const confirmReset = window.confirm(
-      "Reset portfolio capital back to fresh $100.00? This clears past paper trades and restores a clean ledger."
-    );
-    if (!confirmReset) return;
-
-    try {
-      const res = await api.resetCapital();
-      if (res.status === "success") {
-        await fetchAllTrades();
-      }
-    } catch (err) {
-      console.error("[TradingContext] Reset capital error:", err);
-    }
+  // Confirmation Modal Open Helper
+  const openConfirmModal = ({
+    title,
+    description,
+    warningNote,
+    confirmWord,
+    confirmVariant = "danger",
+    checklist = [],
+    action,
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      description,
+      warningNote,
+      confirmWord,
+      confirmVariant,
+      checklist,
+      onConfirm: async () => {
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        if (action) await action();
+      },
+    });
   };
 
-  const switchMode = async (mode) => {
-    if (mode === "live") {
-      const confirmLive = window.confirm(
-        "⚠️ CAUTION: You are switching to LIVE ACCOUNT mode. This will execute real orders with real funds. Proceed?"
-      );
-      if (!confirmLive) return;
-    }
-    await api.switchMode(mode);
+  const closeConfirmModal = () => {
+    setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  // Safe Actions
+  const switchModeSafe = (targetMode) => {
+    const isLive = targetMode.toLowerCase().includes("live");
+
+    const checklist = [
+      { label: "Broker Connected & Healthy", ok: Boolean(telemetry.broker_connected) },
+      { label: "Market Data Fresh", ok: Boolean(telemetry.feed_fresh) },
+      { label: "Risk Circuit Breakers Normal", ok: !telemetry.circuit_breakers?.tripped },
+      { label: "Reconciliation Synchronized", ok: !reconciliationData.has_active_mismatch },
+    ];
+
+    openConfirmModal({
+      title: isLive ? "SWITCH TO LIVE REAL-MONEY MODE" : `Switch Execution Mode to ${targetMode.toUpperCase()}`,
+      description: isLive
+        ? "You are about to switch the execution engine to LIVE REAL CAPITAL. Real broker orders will be submitted with real funds at risk. This operation requires full operator accountability."
+        : `Switch execution mode to ${targetMode.toUpperCase()}. This will re-initialize the execution adapter.`,
+      warningNote: isLive ? "CRITICAL RISK: Real funds at risk. Ensure all risk limits and broker accounts are verified." : null,
+      confirmWord: isLive ? "LIVE" : null,
+      confirmVariant: isLive ? "danger" : "warning",
+      checklist: isLive ? checklist : [],
+      action: async () => {
+        try {
+          await api.switchMode(targetMode);
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Mode switch failed: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const resetCapitalSafe = () => {
+    openConfirmModal({
+      title: "RESET PORTFOLIO CAPITAL BACK TO $100.00",
+      description: "This administrative operation resets the starting capital pool back to $100.00. Past paper trade ledgers will be reset to zero baseline.",
+      warningNote: "Requires Administrator authorization. Clears paper trading performance history.",
+      confirmWord: "RESET",
+      confirmVariant: "danger",
+      checklist: [{ label: "Autonomous Bot Active", ok: true }],
+      action: async () => {
+        try {
+          await api.resetCapital();
+          await fetchAllTrades();
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Capital reset failed: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const emergencyKillSafe = () => {
+    openConfirmModal({
+      title: "🛑 EMERGENCY KILL SWITCH: HALT & LIQUIDATE",
+      description: "Instantly halt the autonomous trading bot, liquidate all open positions at market, and trip the EMERGENCY_STOP circuit breaker.",
+      warningNote: "This will immediately close all active positions and block all new entries until manually reset.",
+      confirmWord: "HALT",
+      confirmVariant: "danger",
+      checklist: [],
+      action: async () => {
+        try {
+          await api.emergencyStop();
+          await fetchAllTrades();
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Emergency stop failed: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const toggleBotSafe = () => {
+    const nextState = !telemetry.is_running;
+    openConfirmModal({
+      title: nextState ? "START AUTONOMOUS TRADING BOT" : "PAUSE AUTONOMOUS TRADING BOT",
+      description: nextState
+        ? "Resume the autonomous trading engine. New setups matching deterministic risk and ML criteria will be submitted."
+        : "Pause the autonomous trading engine. Existing open positions will continue to be monitored for SL/TP, but no new trades will be opened.",
+      confirmVariant: nextState ? "warning" : "danger",
+      action: async () => {
+        try {
+          if (nextState) await api.startBot();
+          else await api.stopBot();
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Bot toggle failed: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const closePositionSafe = (positionId, symbol) => {
+    openConfirmModal({
+      title: `CLOSE POSITION #${positionId} (${symbol})`,
+      description: `Submit immediate market exit for position #${positionId}. This will close the trade and realize current floating P&L.`,
+      confirmVariant: "warning",
+      action: async () => {
+        try {
+          await api.closePosition(positionId);
+          await fetchAllTrades();
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Failed to close position: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const placeManualTradeSafe = (direction) => {
+    const symbol = telemetry.symbol;
+    openConfirmModal({
+      title: `SUBMIT MANUAL ${direction} ON ${symbol}`,
+      description: `Privileged manual execution: Submit market ${direction} for ${symbol} evaluated against all 9 deterministic risk gates.`,
+      warningNote: telemetry.account.mode === "live" ? "CAUTION: This will place a real-money order." : null,
+      confirmVariant: telemetry.account.mode === "live" ? "danger" : "primary",
+      checklist: [
+        { label: "Risk Circuit Breakers Normal", ok: !telemetry.circuit_breakers?.tripped },
+        { label: "Broker Connected", ok: Boolean(telemetry.broker_connected) },
+      ],
+      action: async () => {
+        try {
+          const res = await api.placeManualTrade(direction);
+          if (res.status === "error") {
+            alert(`Order rejected: ${res.message}`);
+          }
+          await fetchAllTrades();
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Trade execution failed: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const triggerRetrainSafe = () => {
+    openConfirmModal({
+      title: "TRIGGER MODEL WALK-FORWARD RETRAINING",
+      description: "Initiates walk-forward validation and Platt probability calibration across the historical market dataset.",
+      confirmVariant: "warning",
+      action: async () => {
+        try {
+          const res = await api.triggerRetrain();
+          alert(`Retrain completed: ${res.message || "Model weights updated"}`);
+          await fetchModels();
+        } catch (err) {
+          alert(`Retrain failed: ${err.message}`);
+        }
+      },
+    });
+  };
+
+  const resetCircuitBreakersSafe = () => {
+    openConfirmModal({
+      title: "ADMINISTRATIVE RESET OF CIRCUIT BREAKERS",
+      description: "Clears all tripped circuit breakers and unlocks new trade entry. Only perform this after verifying the root cause of the risk trip.",
+      warningNote: "Ensure market data feeds and broker accounts are fully healthy before resuming.",
+      confirmVariant: "danger",
+      action: async () => {
+        try {
+          await api.resetCircuitBreakers();
+          await fetchRiskStatus();
+          await api.getStatus().then((d) => d && handleWebSocketMessage(d));
+        } catch (err) {
+          alert(`Circuit breaker reset failed: ${err.message}`);
+        }
+      },
+    });
   };
 
   const switchSymbol = async (symbol) => {
-    const res = await api.switchSymbol(symbol);
-    if (res.status === "success" && res.data) {
-      handleWebSocketMessage(res.data);
+    try {
+      const res = await api.switchSymbol(symbol);
+      if (res.status === "success" && res.data) {
+        handleWebSocketMessage(res.data);
+      }
+    } catch (err) {
+      console.error("[TradingContext] Symbol switch error:", err);
     }
-  };
-
-  const toggleBot = async () => {
-    if (telemetry.is_running) {
-      await api.stopBot();
-    } else {
-      await api.startBot();
-    }
-  };
-
-  const emergencyKill = async () => {
-    const confirmKill = window.confirm(
-      "🛑 EMERGENCY KILL SWITCH: Are you sure you want to close all open positions and halt the autonomous engine?"
-    );
-    if (confirmKill) {
-      await api.emergencyStop();
-      await fetchAllTrades();
-    }
-  };
-
-  const placeManualTrade = async (direction) => {
-    await api.placeManualTrade(direction);
-  };
-
-  const closePosition = async (positionId) => {
-    await api.closePosition(positionId);
-    await fetchAllTrades();
-  };
-
-  const triggerAuditScan = async () => {
-    const res = await api.runAuditScan();
-    if (res) {
-      setTelemetry((prev) => ({ ...prev, audit_matrix: res }));
-    }
-  };
-
-  const exportCSV = () => {
-    api.exportTradesCSV();
   };
 
   const value = {
     activeView,
     setActiveView,
-    theme,
-    toggleTheme,
+    isSidebarCollapsed,
+    toggleSidebar,
     isConnected,
     connectionStatus,
+    lastMessageTime,
+    latencyMs,
     telemetry,
+    ordersData,
+    reconciliationData,
+    riskData,
+    modelsData,
+    auditLogsData,
+    systemHealthData,
     allTradesData,
-    fetchAllTrades,
-    resetCapital,
-    switchMode,
+    confirmModal,
+    openConfirmModal,
+    closeConfirmModal,
+    switchModeSafe,
+    resetCapitalSafe,
+    emergencyKillSafe,
+    toggleBotSafe,
+    closePositionSafe,
+    placeManualTradeSafe,
+    triggerRetrainSafe,
+    resetCircuitBreakersSafe,
     switchSymbol,
-    toggleBot,
-    emergencyKill,
-    placeManualTrade,
-    closePosition,
-    triggerAuditScan,
-    exportCSV,
+    fetchOrders,
+    fetchReconciliation,
+    fetchRiskStatus,
+    fetchModels,
+    fetchAuditLogs,
+    fetchSystemHealth,
+    fetchAllTrades,
+    exportCSV: api.exportTradesCSV,
   };
 
   return <TradingContext.Provider value={value}>{children}</TradingContext.Provider>;

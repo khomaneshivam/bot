@@ -162,4 +162,13 @@ class ModelRegistry:
         print(f"[ModelRegistry] ⏪ Rolled back to model {archived['version']} ({archived['id']})")
         return True
 
+    def get_all_models(self) -> List[Dict]:
+        """Returns all registered models sorted by training timestamp."""
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM model_registry ORDER BY training_timestamp DESC")
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
 model_registry = ModelRegistry()

@@ -1,0 +1,110 @@
+/**
+ * QuantAI Institutional Trading Terminal Design System
+ * High-Density, Professional, Low-Distraction Financial Theme Tokens
+ */
+
+:root {
+  /* Surface hierarchy */
+  --terminal-bg-base: #030712;       /* Slate 950 base */
+  --terminal-bg-card: #0b1120;       /* Slate 900 card surface */
+  --terminal-bg-elevated: #111827;   /* Slate 850 elevated panels */
+  --terminal-bg-hover: #1f2937;      /* Hover states */
+  --terminal-bg-active: #283548;     /* Selected / active */
+
+  /* Borders & Dividers */
+  --terminal-border-subtle: #1e293b; /* Subtle structural borders */
+  --terminal-border-strong: #334155; /* Higher emphasis borders */
+
+  /* Typography */
+  --terminal-text-primary: #f8fafc;  /* 900+ contrast white/slate */
+  --terminal-text-secondary: #94a3b8;/* Muted label / subtext */
+  --terminal-text-muted: #64748b;    /* Dim timestamps / metadata */
+
+  /* Semantic State Colors */
+  --terminal-healthy: #10b981;       /* Emerald */
+  --terminal-healthy-bg: rgba(16, 185, 129, 0.12);
+  --terminal-healthy-border: rgba(16, 185, 129, 0.35);
+
+  --terminal-danger: #f43f5e;        /* Rose */
+  --terminal-danger-bg: rgba(244, 63, 94, 0.12);
+  --terminal-danger-border: rgba(244, 63, 94, 0.35);
+
+  --terminal-warning: #f59e0b;       /* Amber */
+  --terminal-warning-bg: rgba(245, 158, 11, 0.12);
+  --terminal-warning-border: rgba(245, 158, 11, 0.35);
+
+  --terminal-info: #0284c7;          /* Sky Blue */
+  --terminal-info-bg: rgba(2, 132, 199, 0.12);
+  --terminal-info-border: rgba(2, 132, 199, 0.35);
+
+  --terminal-neutral: #64748b;       /* Slate */
+  --terminal-neutral-bg: rgba(100, 116, 139, 0.12);
+  --terminal-neutral-border: rgba(100, 116, 139, 0.35);
+}
+
+/* Tabular numbers for financial alignment */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Card Surface Utility */
+.terminal-panel {
+  background-color: var(--terminal-bg-card);
+  border: 1px solid var(--terminal-border-subtle);
+  border-radius: 0.5rem;
+}
+
+.terminal-panel-elevated {
+  background-color: var(--terminal-bg-elevated);
+  border: 1px solid var(--terminal-border-strong);
+  border-radius: 0.5rem;
+}
+
+/* Dense table typography */
+.terminal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.terminal-table th {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--terminal-text-muted);
+  border-bottom: 1px solid var(--terminal-border-subtle);
+  background-color: rgba(11, 17, 32, 0.8);
+}
+
+.terminal-table td {
+  padding: 0.5rem 0.75rem;
+  color: var(--terminal-text-primary);
+  border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+}
+
+.terminal-table tr:hover td {
+  background-color: rgba(31, 41, 55, 0.5);
+}
+
+/* Live Stale Data Watermark */
+.stale-watermark {
+  position: relative;
+}
+
+.stale-watermark::after {
+  content: "STALE TELEMETRY";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-12deg);
+  font-size: 1.5rem;
+  font-weight: 900;
+  font-family: monospace;
+  color: rgba(244, 63, 94, 0.15);
+  pointer-events: none;
+  white-space: nowrap;
+  letter-spacing: 0.25em;
+}

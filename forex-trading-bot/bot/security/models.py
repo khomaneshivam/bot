@@ -34,6 +34,27 @@ class LoginResponse(BaseModel):
     user_id: str
     username: str
 
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: str = Field(..., min_length=8)
+    confirm_password: Optional[str] = None
+    role: Optional[str] = "TRADER"
+    admin_key: Optional[str] = None
+
+class RegisterResponse(BaseModel):
+    success: bool = True
+    message: str = "Account successfully registered."
+    access_token: str
+    token_type: str = "Bearer"
+    role: Role
+    user_id: str
+    username: str
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str = Field(..., min_length=8)
+    confirm_password: Optional[str] = None
+
 class AuditRecord(BaseModel):
     event_id: str
     timestamp: str

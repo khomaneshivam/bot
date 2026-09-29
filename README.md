@@ -60,9 +60,12 @@ python run.py
 - **AMI**: Ubuntu 24.04 LTS or 22.04 LTS
 - **Instance Type**: `t3.medium` or `t3.small` (min 2GB RAM recommended)
 - **Security Group (Inbound Rules)**:
-  - `SSH` (Port 22) from your IP or `0.0.0.0/0`
-  - `Custom TCP` (Port 8000) from `0.0.0.0/0` (for Dashboard UI)
-  - `HTTP` (Port 80) and `HTTPS` (Port 443) (optional if using reverse proxy)
+  - `SSH` (Port 22) restricted strictly to your administrator IP
+  - `HTTPS` (Port 443) from authorized IPs / Cloudflare
+  - **Do NOT expose Port 8000 directly to the public Internet.** FastAPI should bind to private loopback (`127.0.0.1:8000`) behind a TLS reverse proxy (Nginx or AWS ALB):
+    ```text
+    Internet ──> Port 443 HTTPS (TLS 1.3) ──> Nginx Reverse Proxy ──> FastAPI (127.0.0.1:8000 private)
+    ```
 
 ### 2. Provision EC2 with One Command
 SSH into your EC2 instance and run:
@@ -88,7 +91,7 @@ docker compose up -d --build
 
 ## 🔄 CI/CD Pipeline (GitHub Actions)
 
-This repository includes a production-ready CI/CD pipeline at `.github/workflows/deploy.yml`.
+This repository includes an automated continuous integration and deployment workflow at `.github/workflows/deploy.yml`. Hardening controls (deterministic gate tests, multi-stage container scans, and secret validation) are actively enforced.
 
 ### How It Works:
 1. **CI Quality Gate**: On every push or pull request to `main`, GitHub Actions:
