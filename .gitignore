@@ -20,6 +20,8 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!forex-trading-bot/client/dist/
+!forex-trading-bot/client/dist/**
 downloads/
 eggs/
 .eggs/
