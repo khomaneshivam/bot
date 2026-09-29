@@ -12,94 +12,242 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ----------------------------------------------------------------------------
-  # Quality Gate: Linting, Unit Import Checks & Docker Validation
-  # ----------------------------------------------------------------------------
+
+  # ============================================================================
+  # Quality Gate: Linting, Unit Import Checks, Tests & Docker Validation
+  # ============================================================================
   ci-quality-gate:
     name: 🧪 CI - Quality Gate & Docker Build
     runs-on: ubuntu-latest
 
+    # ==========================================================================
+    # MySQL Service
+    # ==========================================================================
+    services:
+      mysql:
+        image: mysql:8.4
+
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: ${{ secrets.DB_NAME }}
+          MYSQL_USER: ${{ secrets.DB_USER }}
+          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD }}
+
+        ports:
+          - 3306:3306
+
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
+
+      # ========================================================================
+      # Checkout
+      # ========================================================================
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
+
+      # ========================================================================
+      # Node.js
+      # ========================================================================
       - name: 🟢 Setup Node.js (v20)
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
           cache-dependency-path: forex-trading-bot/client/package-lock.json
 
+
+      # ========================================================================
+      # React Frontend
+      # ========================================================================
       - name: ⚛️ Build React Frontend
         working-directory: forex-trading-bot/client
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: |
           npm ci
           npm run build
 
+
+      # ========================================================================
+      # Python
+      # ========================================================================
       - name: 🐍 Setup Python (3.11)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
           cache-dependency-path: forex-trading-bot/requirements.txt
 
-      - name: 📦 Install Python Dependencies & Verify Imports
+
+      # ========================================================================
+      # Install Python Dependencies
+      # ========================================================================
+      - name: 📦 Install Python Dependencies
         working-directory: forex-trading-bot
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest httpx
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+
+      # ========================================================================
+      # Verify Application Import
+      # ========================================================================
+      - name: 🔍 Verify FastAPI & Bot Engine
+        working-directory: forex-trading-bot
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          ALLOW_SQLITE_FALLBACK: "false"
+
+        run: |
           python -c "import server.app; print('✅ FastAPI server and Bot Engine verified successfully!')"
 
-      - name: 🧪 Execute Automated Test Suite (Unit, Integration, Failure-Injection, Invariants)
+
+      # ========================================================================
+      # Run Tests
+      # ========================================================================
+      - name: 🧪 Execute Automated Test Suite
         working-directory: forex-trading-bot
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          ALLOW_SQLITE_FALLBACK: "false"
+
         run: |
           pytest -v
 
+
+      # ========================================================================
+      # Docker Build
+      # ========================================================================
       - name: 🐳 Validate Docker Container Build
         run: |
           docker build -t quantai-bot:ci ./forex-trading-bot
 
-  # ----------------------------------------------------------------------------
-  # Continuous Deployment: Automated AWS EC2 Deployment via SSH
-  # ----------------------------------------------------------------------------
+
+  # ============================================================================
+  # Continuous Deployment: AWS EC2
+  # ============================================================================
   deploy-ec2:
     name: 🚀 CD - Deploy to AWS EC2
+
     needs: ci-quality-gate
+
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
     runs-on: ubuntu-latest
 
     steps:
+
+      # ========================================================================
+      # Checkout
+      # ========================================================================
       - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
+
+      # ========================================================================
+      # Verify EC2 Secrets
+      # ========================================================================
       - name: 🔍 Verify EC2 Deployment Secrets
         id: check-secrets
         run: |
+
           if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+
             echo "SECRETS_CONFIGURED=false" >> $GITHUB_ENV
+
             echo "::warning title=EC2 Secrets Missing::GitHub Secrets (EC2_HOST and EC2_SSH_KEY) are not configured. To enable auto-deployment to EC2, go to Settings -> Secrets and variables -> Actions and add EC2_HOST, EC2_USER, EC2_SSH_KEY."
+
           else
+
             echo "SECRETS_CONFIGURED=true" >> $GITHUB_ENV
+
           fi
 
+
+      # ========================================================================
+      # Deploy to EC2
+      # ========================================================================
       - name: 🛰️ Deploy to AWS EC2 via SSH
         if: env.SECRETS_CONFIGURED == 'true'
+
         uses: appleboy/ssh-action@v1.0.3
+
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
+
           script_stop: true
+
           script: |
+
             echo "🚀 Connecting to AWS EC2 deployment server..."
+
             TARGET_DIR="$HOME/bot"
-            
+
+            echo "📂 Deployment directory: $TARGET_DIR"
+
+
+            # ------------------------------------------------------------------
+            # Clone repository if it does not exist
+            # ------------------------------------------------------------------
             if [ ! -d "$TARGET_DIR/.git" ]; then
-              echo "Cloning repository..."
+
+              echo "📥 Repository not found. Cloning..."
+
               git clone https://github.com/${{ github.repository }}.git "$TARGET_DIR"
+
+            else
+
+              echo "📦 Repository already exists."
+
             fi
-            
+
+
+            # ------------------------------------------------------------------
+            # Move into application directory
+            # ------------------------------------------------------------------
             cd "$TARGET_DIR"
+
+
+            # ------------------------------------------------------------------
+            # Get latest code
+            # ------------------------------------------------------------------
+            echo "🔄 Updating repository..."
+
+            git fetch origin main
+
+            git reset --hard origin/main
+
+
+            # ------------------------------------------------------------------
+            # Make deployment scripts executable
+            # ------------------------------------------------------------------
             chmod +x deploy/*.sh
+
+
+            # ------------------------------------------------------------------
+            # Run deployment
+            # ------------------------------------------------------------------
+            echo "🚀 Running deployment script..."
+
             bash deploy/deploy.sh "$TARGET_DIR"
+
+
+            echo "✅ Deployment completed successfully."
