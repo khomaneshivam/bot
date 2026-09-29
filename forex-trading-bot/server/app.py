@@ -546,8 +546,12 @@ async def close_position(req: ClosePositionRequest, user: User = Depends(require
             target=req.position_id,
             result="SUCCESS"
         )
+        try:
+            await bot_manager._broadcast_telemetry()
+        except Exception:
+            pass
         return {"status": "success", "closed": closed}
-    return {"status": "error", "message": "Position not found"}
+    raise HTTPException(status_code=404, detail=f"Position #{req.position_id} not found or already closed.")
 
 @app.post("/api/emergency-stop")
 async def emergency_stop(user: User = Depends(require_role(Role.TRADER))):

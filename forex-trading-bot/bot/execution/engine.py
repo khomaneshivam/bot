@@ -206,15 +206,17 @@ class ExecutionEngine:
 
     def close_position(self, position_id: str, exit_reason: str = "MANUAL") -> Optional[Dict]:
         """Closes active position via execution service."""
-        target_pos = next((p for p in self.open_positions if p["id"] == position_id), None)
-        if not target_pos:
-            return None
+        target_pos = next(
+            (p for p in self.open_positions if str(p["id"]) == str(position_id) or str(p.get("broker_order_id")) == str(position_id) or str(p.get("broker_ticket")) == str(position_id)),
+            None
+        )
+        pos_id_to_close = target_pos["id"] if target_pos else str(position_id)
 
-        close_result = execution_service.close_position(position_id, exit_reason=exit_reason)
+        close_result = execution_service.close_position(pos_id_to_close, exit_reason=exit_reason)
         if close_result.success:
             self.open_positions = execution_service.get_open_positions()
             self._load_persisted_state()
-            return target_pos
+            return target_pos or {"id": pos_id_to_close, "status": "CLOSED"}
         return None
 
     def close_all_positions(self, reason: str = "EMERGENCY_STOP") -> int:

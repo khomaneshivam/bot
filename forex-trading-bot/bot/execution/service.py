@@ -206,7 +206,7 @@ class ExecutionService:
         """Closes an active position on both broker and database."""
         conn = db.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM active_positions WHERE id = ?", (position_id,))
+        cursor.execute("SELECT * FROM active_positions WHERE id = ? OR broker_order_id = ?", (str(position_id), str(position_id)))
         pos = cursor.fetchone()
         if not pos:
             conn.close()
@@ -218,7 +218,8 @@ class ExecutionService:
             )
 
         pos_dict = dict(pos)
-        broker_ticket = pos_dict.get("broker_order_id") or position_id
+        pos_id = pos_dict["id"]
+        broker_ticket = pos_dict.get("broker_order_id") or pos_id
 
         # Dispatch close to adapter
         close_result = self.adapter.close_position(
@@ -228,9 +229,12 @@ class ExecutionService:
             volume=float(pos_dict["size"])
         )
 
-        if close_result.success:
+        # Allow successful close OR manual cleanup of orphaned broker position (e.g., after broker restart)
+        is_orphaned_close = not close_result.success and exit_reason.startswith("MANUAL") and "not found" in (close_result.error_message or "").lower()
+
+        if close_result.success or is_orphaned_close:
             now = time.strftime("%Y-%m-%d %H:%M:%S")
-            exit_price = close_result.executed_price or pos_dict["entry_price"]
+            exit_price = close_result.executed_price or pos_dict.get("current_price") or pos_dict["entry_price"]
             entry_price = float(pos_dict["entry_price"])
             size = float(pos_dict["size"])
             direction = pos_dict["direction"]
@@ -244,15 +248,17 @@ class ExecutionService:
             else:
                 gross_pnl = diff * size * 100000.0
 
-            net_pnl = gross_pnl - close_result.commission
+            commission = close_result.commission if close_result.success else 0.0
+            net_pnl = gross_pnl - commission
             entry_p = max(entry_price, 1e-6)
             ret_pct = round(((exit_price - entry_p) / entry_p * 100.0) if direction == "BUY" else ((entry_p - exit_price) / entry_p * 100.0), 2)
             was_wrong = 1 if net_pnl < 0 else 0
 
-            # Remove from active_positions
-            cursor.execute("DELETE FROM active_positions WHERE id = ?", (position_id,))
+            # Remove from active_positions using resolved primary key pos_id
+            cursor.execute("DELETE FROM active_positions WHERE id = ?", (pos_id,))
 
             # Update trades table
+            final_reason = exit_reason if not is_orphaned_close else f"{exit_reason}_ORPHANED_CLEANUP"
             cursor.execute("""
                 UPDATE trades SET
                     exit_price = ?,
@@ -269,11 +275,21 @@ class ExecutionService:
                 WHERE id = ?
             """, (
                 exit_price, exit_price, now, now, round(gross_pnl, 2),
-                round(net_pnl, 2), round(net_pnl, 2), ret_pct, exit_reason,
-                was_wrong, position_id
+                round(net_pnl, 2), round(net_pnl, 2), ret_pct, final_reason,
+                was_wrong, pos_id
             ))
-
             conn.commit()
+            conn.close()
+
+            return OrderResult(
+                success=True,
+                status=OrderStatus.FILLED,
+                client_order_id=f"close_{pos_id}",
+                executed_price=exit_price,
+                executed_quantity=size,
+                commission=commission,
+                error_message=None
+            )
 
         conn.close()
         return close_result

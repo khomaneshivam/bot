@@ -346,17 +346,26 @@ export function TradingProvider({ children }) {
     });
   };
 
-  const closePositionSafe = (positionId, symbol) => {
+  const closePositionSafe = (positionId, symbol = "") => {
+    const sym = symbol || telemetry.open_positions?.find((p) => String(p.id) === String(positionId) || String(p.broker_order_id) === String(positionId))?.symbol || "";
     openConfirmModal({
-      title: `CLOSE POSITION #${positionId} (${symbol})`,
+      title: `CLOSE POSITION #${positionId}${sym ? ` (${sym})` : ""}`,
       description: `Submit immediate market exit for position #${positionId}. This will close the trade and realize current floating P&L.`,
       confirmVariant: "warning",
       action: async () => {
         try {
-          await api.closePosition(positionId);
+          const res = await api.closePosition(positionId);
+          if (res && res.status === "error") {
+            alert(`Failed to close position: ${res.message || "Position not found"}`);
+            return;
+          }
           await fetchAllTrades();
           await api.getStatus().then((d) => d && handleWebSocketMessage(d));
         } catch (err) {
+          if (err.status === 401 || err.message?.toLowerCase().includes("authenticate") || err.message?.toLowerCase().includes("log in")) {
+            alert("Authentication required: Please sign in via the top bar as 'trader' or 'admin' to close positions.");
+            return;
+          }
           alert(`Failed to close position: ${err.message}`);
         }
       },
@@ -460,7 +469,9 @@ export function TradingProvider({ children }) {
     emergencyKillSafe,
     toggleBotSafe,
     closePositionSafe,
+    closePosition: closePositionSafe,
     placeManualTradeSafe,
+    placeManualTrade: placeManualTradeSafe,
     triggerRetrainSafe,
     resetCircuitBreakersSafe,
     switchSymbol,
